@@ -1,0 +1,26 @@
+# Global defaults for all domains
+[global]
+port = 443
+path = "/"
+verify_peer = true
+ip_version = "auto"   # "auto" | "v4" | "v6" | "both"
+
+# timeouts in milliseconds
+handshake_timeout_ms = 4000
+overall_timeout_ms = 8000
+max_idle_timeout_ms = 5000
+
+# QUIC transport params (kept generous for robustness)
+initial_max_data = 1000000
+initial_max_stream_data_bidi_local = 1000000
+initial_max_stream_data_bidi_remote = 1000000
+initial_max_stream_data_uni = 1000000
+initial_max_streams_bidi = 16
+initial_max_streams_uni = 16
+
+# ALPN list to advertise (strings). For pure H3 probing keep ["h3"].
+alpn = ["h3"]
+
+# Optional per-domain overrides (use the bare hostname as the key)
+[domains."example.com"]
+path = "/example.html"

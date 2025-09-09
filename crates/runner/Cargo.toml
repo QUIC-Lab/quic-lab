@@ -1,0 +1,9 @@
+[package]
+name = "runner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+core = { path = "../core" }
+probes = { path = "../probes" }

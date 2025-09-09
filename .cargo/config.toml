@@ -1,0 +1,4 @@
+[alias]
+r = "run -p runner"
+b = "build -p runner"
+t = "test -p runner"
