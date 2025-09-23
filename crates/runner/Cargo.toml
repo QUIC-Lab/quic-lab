@@ -7,3 +7,4 @@ edition = "2024"
 anyhow = "1"
 core = { path = "../core" }
 probes = { path = "../probes" }
+rayon = "1.10"

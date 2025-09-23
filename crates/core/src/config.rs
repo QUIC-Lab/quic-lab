@@ -10,6 +10,33 @@ pub struct RootConfig {
     pub global: DomainConfig,
     #[serde(default)]
     pub domains: HashMap<String, DomainConfig>,
+
+    /// Global scheduling / ethics knobs
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchedulerConfig {
+    /// Number of worker threads (0 = auto = CPU count)
+    #[serde(default = "default_concurrency")]
+    pub concurrency: usize,
+    /// Global maximum "requests per second" (0 = unlimited)
+    #[serde(default = "default_rps")]
+    pub requests_per_second: u32,
+    /// Short-term burst allowance for the limiter (tokens)
+    #[serde(default = "default_burst")]
+    pub burst: u32,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            concurrency: default_concurrency(),
+            requests_per_second: default_rps(),
+            burst: default_burst(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,12 +97,14 @@ impl Default for DomainConfig {
             initial_max_streams_bidi: default_streams(),
             initial_max_streams_uni: default_streams(),
             alpn: default_alpn(),
-
         }
     }
 }
 
 // ---- defaults ----
+fn default_concurrency() -> usize { 0 }   // 0 = auto
+fn default_rps() -> u32 { 10 }            // sane default
+fn default_burst() -> u32 { 10 }          // small burst
 
 fn default_port() -> u16 { 443 }
 fn default_path() -> String { "/".into() }
@@ -108,7 +137,6 @@ pub fn read_domains<P: AsRef<Path>>(p: P) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for line in reader.lines() {
         let line = line?;
-        // Support inline comments: "example.com   # stuff"
         let trimmed = line.split('#').next().unwrap_or("").trim();
         if trimmed.is_empty() {
             continue;

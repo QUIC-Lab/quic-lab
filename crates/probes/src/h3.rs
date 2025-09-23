@@ -2,12 +2,13 @@ use anyhow::Result;
 
 use core::config::DomainConfig;
 use core::resolver::{resolve_peer, resolve_peers_for_both};
+use core::throttle::RateLimit;
 use core::transport::quic::run;
 use core::types::{family_label, IpVersion};
 
 /// Minimal H3 GET probe.
 /// Handles Auto / IPv4 / IPv6 / Both by calling into core resolver + transport.
-pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
+pub fn probe(host: &str, cfg: &DomainConfig, rl: &RateLimit) -> Result<()> {
     match cfg.ip_version {
         IpVersion::Both => {
             let (v4, v6) = resolve_peers_for_both(host, cfg.port)?;
@@ -17,6 +18,7 @@ pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
                     family_label(IpVersion::Ipv4),
                     addr
                 );
+                rl.until_ready();               // <- throttle
                 if let Err(e) = run(host, addr, cfg) {
                     eprintln!("   [{}] {}", family_label(IpVersion::Ipv4), e);
                 }
@@ -33,6 +35,7 @@ pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
                     family_label(IpVersion::Ipv6),
                     addr
                 );
+                rl.until_ready();               // <- throttle
                 if let Err(e) = run(host, addr, cfg) {
                     eprintln!("   [{}] {}", family_label(IpVersion::Ipv6), e);
                 }
@@ -54,7 +57,7 @@ pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
                 first,
                 if first_is_v4 { "IPv4" } else { "IPv6" }
             );
-
+            rl.until_ready();                   // <- throttle
             match run(host, first, cfg) {
                 Ok(outcome) if outcome.retryable => {
                     // Flip family and try once
@@ -65,7 +68,8 @@ pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
                             alt,
                             if alt.is_ipv4() { "IPv4" } else { "IPv6" }
                         );
-                        let _ = run(host, alt, cfg); // final attempt; errors already printed inside
+                        rl.until_ready();       // <- throttle
+                        let _ = run(host, alt, cfg);
                     }
                     Ok(())
                 }
@@ -82,6 +86,7 @@ pub fn probe(host: &str, cfg: &DomainConfig) -> Result<()> {
                 addr,
                 if addr.is_ipv4() { "IPv4" } else { "IPv6" }
             );
+            rl.until_ready();                   // <- throttle
             let _ = run(host, addr, cfg)?;
             Ok(())
         }
