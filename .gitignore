@@ -1,6 +1,7 @@
 ### General ###
 /config.toml
 /domains.txt
+/out/results.jsonl
 /sslkeylogfile.txt
 *.env*
 

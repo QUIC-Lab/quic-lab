@@ -1,94 +1,60 @@
 use anyhow::Result;
 
-use core::config::DomainConfig;
+use core::config::{DelayConfig};
+use core::types::ConnectionConfigConfig;
+use core::recorder::Recorder;
 use core::resolver::{resolve_peer, resolve_peers_for_both};
 use core::throttle::RateLimit;
-use core::transport::quic::run;
-use core::types::{family_label, IpVersion};
+use core::transport::quic;
+use core::types::{IpVersion};
 
-/// Minimal H3 GET probe.
-/// Handles Auto / IPv4 / IPv6 / Both by calling into core resolver + transport.
-pub fn probe(host: &str, cfg: &DomainConfig, rl: &RateLimit) -> Result<()> {
-    match cfg.ip_version {
-        IpVersion::Both => {
-            let (v4, v6) = resolve_peers_for_both(host, cfg.port)?;
-            if let Some(addr) = v4 {
-                println!(
-                    "   [{}] Connecting to {} (IPv4)",
-                    family_label(IpVersion::Ipv4),
-                    addr
-                );
-                rl.until_ready();               // <- throttle
-                if let Err(e) = run(host, addr, cfg) {
-                    eprintln!("   [{}] {}", family_label(IpVersion::Ipv4), e);
-                }
-            } else {
-                eprintln!(
-                    "   [{}] Skipping: no IPv4 address",
-                    family_label(IpVersion::Ipv4)
-                );
+/// Try a sequence of connection configs; stop at first success. Every connection config is recorded.
+pub fn probe(
+    host: &str,
+    connection_configs: &[ConnectionConfigConfig],
+    delay: &DelayConfig,
+    rl: &RateLimit,
+    recorder: &Recorder,
+) -> Result<()> {
+    // Go through connection config list
+    for (idx, att) in connection_configs.iter().enumerate() {
+        let fam = att.ip_version;
+        let mut attempt_succeeded = false;
+
+        // Resolve per attempt/family
+        let targets: Vec<(IpVersion, std::net::SocketAddr)> = match fam {
+            IpVersion::Both => {
+                let (v4, v6) = resolve_peers_for_both(host, att.port)?;
+                let mut v = Vec::with_capacity(2);
+                if let Some(a) = v4 { v.push((IpVersion::Ipv4, a)); }
+                if let Some(a) = v6 { v.push((IpVersion::Ipv6, a)); }
+                v
             }
-
-            if let Some(addr) = v6 {
-                println!(
-                    "   [{}] Connecting to {} (IPv6)",
-                    family_label(IpVersion::Ipv6),
-                    addr
-                );
-                rl.until_ready();               // <- throttle
-                if let Err(e) = run(host, addr, cfg) {
-                    eprintln!("   [{}] {}", family_label(IpVersion::Ipv6), e);
-                }
-            } else {
-                eprintln!(
-                    "   [{}] Skipping: no IPv6 address",
-                    family_label(IpVersion::Ipv6)
-                );
+            IpVersion::Auto | IpVersion::Ipv4 | IpVersion::Ipv6 => {
+                let a = resolve_peer(host, att.port, fam)?;
+                vec![(if a.is_ipv4() { IpVersion::Ipv4 } else { IpVersion::Ipv6 }, a)]
             }
-            Ok(())
-        }
+        };
 
-        IpVersion::Auto => {
-            // Try OS-preferred first
-            let first = resolve_peer(host, cfg.port, IpVersion::Auto)?;
-            let first_is_v4 = first.is_ipv4();
-            println!(
-                "   [Auto] Connecting to {} ({})",
-                first,
-                if first_is_v4 { "IPv4" } else { "IPv6" }
-            );
-            rl.until_ready();                   // <- throttle
-            match run(host, first, cfg) {
-                Ok(outcome) if outcome.retryable => {
-                    // Flip family and try once
-                    let alt_family = if first_is_v4 { IpVersion::Ipv6 } else { IpVersion::Ipv4 };
-                    if let Ok(alt) = resolve_peer(host, cfg.port, alt_family) {
-                        println!(
-                            "   [Auto→fallback] Connecting to {} ({})",
-                            alt,
-                            if alt.is_ipv4() { "IPv4" } else { "IPv6" }
-                        );
-                        rl.until_ready();       // <- throttle
-                        let _ = run(host, alt, cfg);
-                    }
-                    Ok(())
-                }
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
+        for (fam_eff, addr) in targets {
+            rl.until_ready();
+
+            let (rec, outcome) = quic::run(host, addr, fam_eff, att)?;
+            recorder.write(&rec);
+
+            if !outcome.retryable {
+                attempt_succeeded = true;
+                break;
             }
         }
 
-        fam @ (IpVersion::Ipv4 | IpVersion::Ipv6) => {
-            let addr = resolve_peer(host, cfg.port, fam)?;
-            println!(
-                "   [{}] Connecting to {} ({})",
-                family_label(fam),
-                addr,
-                if addr.is_ipv4() { "IPv4" } else { "IPv6" }
-            );
-            rl.until_ready();                   // <- throttle
-            let _ = run(host, addr, cfg)?;
-            Ok(())
+        // Stop at first successful attempt
+        if attempt_succeeded {
+            break;
+        } else if idx + 1 < connection_configs.len() && delay.inter_attempt_delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay.inter_attempt_delay_ms));
         }
     }
+
+    Ok(())
 }

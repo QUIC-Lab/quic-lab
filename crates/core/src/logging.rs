@@ -5,7 +5,7 @@ pub fn init_default_logging() {
         unsafe {
             std::env::set_var(
                 "RUST_LOG",
-                "info,quiche=warn,quiche::h3=warn,quiche::tls=warn",
+                "info,tquic=warn,tquic::h3=warn",
             );
         }
     }

@@ -4,3 +4,4 @@ pub mod resolver;
 pub mod transport;
 pub mod types;
 pub mod throttle;
+pub mod recorder;

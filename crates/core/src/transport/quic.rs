@@ -1,243 +1,419 @@
 use anyhow::Result;
-use quiche::h3;
-use rand::RngCore;
-use std::fs::OpenOptions;
+use std::cell::RefCell;
 use std::net::{SocketAddr, UdpSocket};
-use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
-use quiche::h3::NameValue;
-use crate::config::DomainConfig;
-use crate::types::ProbeOutcome;
 
-/// Execute one QUIC/H3 probe attempt against a resolved peer.
-/// Returns a ProbeOutcome indicating whether a family-fallback retry is sensible.
-pub fn run(host: &str, peer_addr: SocketAddr, cfg: &DomainConfig) -> Result<ProbeOutcome> {
-    println!("==> {}:{} {}", host, cfg.port, cfg.path);
+use tquic::{
+    endpoint::Endpoint,
+    Config as QuicConfig,
+    Connection,
+    PacketInfo,
+    PacketSendHandler,
+    TlsConfig,
+    TransportHandler,
+    Error as QuicError,
+    MultipathAlgorithm,
+    h3::{
+        connection::Http3Connection,
+        Http3Config,
+        Http3Event,
+        Header,
+        NameValue,
+        Http3Error,
+    },
+};
 
-    let socket = UdpSocket::bind(if peer_addr.is_ipv4() {
-        "0.0.0.0:0"
-    } else {
-        "[::]:0"
-    })?;
+use crate::types::{
+    ConnectionConfigConfig,
+    Http3Result,
+    IpVersion,
+    MinimalConnectionConfigCfg,
+    ProbeOutcome,
+    ProbeRecord,
+};
+
+/// Map string -> MultipathAlgorithm (tquic 1.6 public variants).
+fn parse_mpath_algo(s: &str) -> Option<MultipathAlgorithm> {
+    match s {
+        "minrtt" | "min-rtt" => Some(MultipathAlgorithm::MinRtt),
+        "redundant" | "dup"  => Some(MultipathAlgorithm::Redundant),
+        "roundrobin" | "rr"  => Some(MultipathAlgorithm::RoundRobin),
+        _ => None,
+    }
+}
+
+/// Public entry (compat): alias to run_attempt.
+pub fn run(
+    host: &str,
+    peer_addr: SocketAddr,
+    fam: IpVersion,
+    cfg: &ConnectionConfigConfig,
+) -> Result<(ProbeRecord, ProbeOutcome)> {
+    run_connection_config(host, peer_addr, fam, cfg)
+}
+
+/// Drive a single QUIC(+H3) attempt using tquic.
+pub fn run_connection_config(
+    host: &str,
+    peer_addr: SocketAddr,
+    fam: IpVersion,
+    cfg: &ConnectionConfigConfig,
+) -> Result<(ProbeRecord, ProbeOutcome)> {
+    const MAX_DGRAM: usize = 1350;
+
+    // UDP socket
+    let socket = UdpSocket::bind(if peer_addr.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" })?;
     socket.connect(peer_addr)?;
     socket.set_nonblocking(true)?;
 
-    // --- QUIC config
-    let mut qcfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-
-    // ALPN
-    let alpn_wire: Vec<Vec<u8>> = cfg.alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
-    let alpn_refs: Vec<&[u8]> = alpn_wire.iter().map(|v| v.as_slice()).collect();
-    qcfg.set_application_protos(&alpn_refs)?;
-
-    const MAX_DATAGRAM_SIZE: usize = 1350;
-    qcfg.set_max_recv_udp_payload_size(MAX_DATAGRAM_SIZE);
-    qcfg.set_max_send_udp_payload_size(MAX_DATAGRAM_SIZE);
+    // ---- tquic Config
+    let mut qcfg = QuicConfig::new()?;
     qcfg.set_max_idle_timeout(cfg.max_idle_timeout_ms);
+    qcfg.set_max_handshake_timeout(cfg.handshake_timeout_ms);
+    qcfg.set_recv_udp_payload_size(MAX_DGRAM as u16);
+    qcfg.set_send_udp_payload_size(MAX_DGRAM);
+
     qcfg.set_initial_max_data(cfg.initial_max_data);
     qcfg.set_initial_max_stream_data_bidi_local(cfg.initial_max_stream_data_bidi_local);
     qcfg.set_initial_max_stream_data_bidi_remote(cfg.initial_max_stream_data_bidi_remote);
     qcfg.set_initial_max_stream_data_uni(cfg.initial_max_stream_data_uni);
     qcfg.set_initial_max_streams_bidi(cfg.initial_max_streams_bidi);
     qcfg.set_initial_max_streams_uni(cfg.initial_max_streams_uni);
-    qcfg.verify_peer(cfg.verify_peer);
 
-    // Resolve key log file path: env var or default "sslkeylogfile.txt"
-    let keylog_path: PathBuf = match std::env::var_os("SSLKEYLOGFILE") {
-        Some(path) => PathBuf::from(path),
-        None => PathBuf::from("sslkeylogfile.txt"),
-    };
-
-    // Tell quiche to emit secrets
-    qcfg.log_keys();
-
-    // Random SCID
-    let mut scid_bytes = [0u8; quiche::MAX_CONN_ID_LEN];
-    rand::rng().fill_bytes(&mut scid_bytes);
-    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
-
-    let local_addr = socket.local_addr()?;
-    let mut conn = quiche::connect(Some(host), &scid, local_addr, peer_addr, &mut qcfg)?;
-
-    // Always try to open/append the keylog file
-    match OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&keylog_path)
-    {
-        Ok(file) => conn.set_keylog(Box::new(file)),
-        Err(e) => eprintln!(
-            "Failed to open keylog file at {}: {e}",
-            keylog_path.display()
-        ),
+    if cfg.multipath {
+        qcfg.enable_multipath(true);
+        if let Some(algo) = cfg
+            .multipath_algorithm
+            .as_deref()
+            .and_then(|s| parse_mpath_algo(&s.to_ascii_lowercase()))
+        {
+            qcfg.set_multipath_algorithm(algo);
+        }
     }
 
-    let mut out = [0u8; MAX_DATAGRAM_SIZE];
-    let mut in_buf = [0u8; 65535];
+    // TLS + ALPN
+    let alpn_wire: Vec<Vec<u8>> = cfg.alpn.iter().map(|s| s.as_bytes().to_vec()).collect();
+    // NOTE: tquic 1.6: new_client_config(alpn, early_data_enabled=false)
+    let mut tls = TlsConfig::new_client_config(alpn_wire, false)?;
+    tls.set_verify(cfg.verify_peer);
+    qcfg.set_tls_config(tls);
 
-    // Kick initial ClientHello
-    if let Ok((write, send_info)) = conn.send(&mut out) {
-        let _ = socket.send_to(&out[..write], send_info.to)?;
-    }
+    // ---- endpoint + handlers
+    let sender = Rc::new(UdpSender { socket });
+    let state = Rc::new(RefCell::new(H3State::new(host, &cfg.path)));
+    let handler = Rc::new(TransportCb { state: state.clone() });
+    let mut endpoint = Endpoint::new(
+        Box::new(qcfg),
+        /*server=*/ false,
+        Box::new(HandlerShim { inner: handler }),
+        sender.clone(),
+    );
 
-    let start = Instant::now();
-    let handshake_deadline_at = start + Duration::from_millis(cfg.handshake_timeout_ms);
-    let overall_deadline_at = start + Duration::from_millis(cfg.overall_timeout_ms);
+    // Connect (last arg: per-connection Config override -> None)
+    let _id = endpoint.connect(
+        sender.socket.local_addr()?,
+        peer_addr,
+        Some(host),
+        None,
+        None,
+        None,
+    )?;
 
-    let mut h3_conn: Option<h3::Connection> = None;
-    let mut printed_http3_yes = false;
+    // Timers
+    let t_start = Instant::now();
+    let handshake_deadline = t_start + Duration::from_millis(cfg.handshake_timeout_ms);
+    let overall_deadline   = t_start + Duration::from_millis(cfg.overall_timeout_ms);
 
+    // I/O buffer
+    let mut in_buf = vec![0u8; 64 * 1024];
+
+    // Main loop
     loop {
-        match socket.recv(&mut in_buf) {
-            Ok(len) => {
-                let recv_info = quiche::RecvInfo { from: peer_addr, to: socket.local_addr()? };
-                let _ = conn.recv(&mut in_buf[..len], recv_info)?;
+        // 1) read UDP (nonblocking)
+        match sender.socket.recv_from(&mut in_buf) {
+            Ok((n, from)) => {
+                let info = PacketInfo {
+                    src: from,
+                    dst: sender.socket.local_addr()?,
+                    time: Instant::now(),
+                };
+                endpoint.recv(&mut in_buf[..n], &info)?;
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            // Windows UDP ICMP “Port Unreachable” (WSAECONNRESET 10054)
-            Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionReset || e.raw_os_error() == Some(10054) => {
-                println!("   QUIC handshake: FAILED (UDP reset / port unreachable)");
-                println!("   HTTP/3 support: NO");
-                return Ok(ProbeOutcome::retryable_fail());
-            }
-            // Linux ECONNREFUSED (111)
-            Err(ref e) if e.raw_os_error() == Some(111) => {
-                println!("   QUIC handshake: FAILED (UDP reset / port unreachable)");
-                println!("   HTTP/3 support: NO");
-                return Ok(ProbeOutcome::retryable_fail());
-            }
-            // Host unreachable variants
-            Err(ref e) if e.raw_os_error() == Some(10065) /* WSAEHOSTUNREACH */ => {
-                println!("   QUIC handshake: FAILED (host unreachable)");
-                println!("   HTTP/3 support: NO");
-                return Ok(ProbeOutcome::retryable_fail());
-            }
-            Err(ref e) if e.raw_os_error() == Some(113) /* EHOSTUNREACH */ => {
-                println!("   QUIC handshake: FAILED (host unreachable)");
-                println!("   HTTP/3 support: NO");
-                return Ok(ProbeOutcome::retryable_fail());
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => return Err(e.into()),
         }
 
-        if conn.is_established() && h3_conn.is_none() {
-            let alpn_bytes = conn.application_proto(); // &[u8]
-            let alpn_str = String::from_utf8_lossy(alpn_bytes);
+        // 2) advance connections
+        endpoint.process_connections()?;
 
-            println!(
-                "   QUIC handshake: OK (ALPN: {})",
-                if alpn_bytes.is_empty() {
-                    "-"
-                } else {
-                    &alpn_str
-                }
-            );
-
-            // Only do HTTP/3 if ALPN == "h3".
-            if alpn_bytes == b"h3" {
-                let h3_cfg = h3::Config::new()?;
-                let mut h3c = h3::Connection::with_transport(&mut conn, &h3_cfg)?;
-                let req = vec![
-                    h3::Header::new(b":method", b"GET"),
-                    h3::Header::new(b":scheme", b"https"),
-                    h3::Header::new(b":authority", host.as_bytes()),
-                    h3::Header::new(b":path", cfg.path.as_bytes()),
-                    h3::Header::new(b"user-agent", b"h3-probe (quiche)"),
-                ];
-                let _sid = h3c.send_request(&mut conn, &req, true)?;
-                h3_conn = Some(h3c);
-            } else {
-                println!("   HTTP/3 support: NO (ALPN negotiated to '{}')", alpn_str);
+        // 3) timeouts
+        if let Some(dur) = endpoint.timeout() {
+            if Instant::now().duration_since(t_start) >= dur {
+                endpoint.on_timeout(Instant::now());
             }
         }
 
-        if let Some(h3c) = h3_conn.as_mut() {
-            loop {
-                match h3c.poll(&mut conn) {
-                    Ok((stream_id, ev)) => {
-                        use quiche::h3::Event::*;
-                        match ev {
-                            Headers { list, .. } => {
-                                if !printed_http3_yes {
-                                    if let Some(s) = extract_status_from_headers(&list) {
-                                        println!("   HTTP/3 support: YES (status {s})");
-                                    } else {
-                                        println!("   HTTP/3 support: YES (headers)");
-                                    }
-                                    printed_http3_yes = true;
-                                }
-                            }
-                            Data => {
-                                let mut body = [0u8; 4096];
-                                while let Ok(n) = h3c.recv_body(&mut conn, stream_id, &mut body) {
-                                    if n == 0 {
-                                        break;
-                                    }
-                                }
-                            }
-                            Finished => {
-                                conn.close(true, 0, b"done").ok();
-                                break;
-                            }
-                            GoAway { .. } | Reset { .. } | PriorityUpdate { .. } => {}
-                        }
-                    }
-                    Err(h3::Error::Done) => break,
-                    Err(e) => {
-                        eprintln!("   HTTP/3 error: {e:?}");
-                        break;
-                    }
-                }
+        // 4) exit conditions / deadlines
+        {
+            let s = state.borrow();
+            if s.done {
+                break;
+            }
+            if s.t_handshake_ok_ms.is_none() && Instant::now() >= handshake_deadline {
+                drop(s);
+                state.borrow_mut().error = Some("handshake timeout".into());
+                break;
             }
         }
-
-        // Send any pending QUIC packets.
-        loop {
-            match conn.send(&mut out) {
-                Ok((write, send_info)) => {
-                    let _ = socket.send_to(&out[..write], send_info.to)?;
-                }
-                Err(quiche::Error::Done) => break,
-                Err(e) => return Err(e.into()),
-            }
-        }
-
-        // Handle QUIC's internal timeout callbacks.
-        if let Some(d) = conn.timeout() {
-            if Instant::now().duration_since(start) >= d {
-                conn.on_timeout();
-            }
-        }
-
-        // Exit conditions
-        if conn.is_closed() {
+        if Instant::now() >= overall_deadline {
+            state.borrow_mut().error = Some("overall timeout".into());
             break;
         }
-        if Instant::now() >= overall_deadline_at {
-            println!("   Result: TIMEOUT (overall)");
-            return Ok(ProbeOutcome::retryable_fail()); // treat as retryable for Auto
-        }
-        if !conn.is_established() && Instant::now() >= handshake_deadline_at {
-            println!("   QUIC handshake: FAILED (timeout)");
-            println!("   HTTP/3 support: NO");
-            return Ok(ProbeOutcome::retryable_fail());
-        }
 
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(2));
     }
 
-    if !conn.is_established() && !printed_http3_yes {
-        println!("   Result: QUIC not established → HTTP/3 NO");
-        return Ok(ProbeOutcome::nonretryable_fail());
-    }
+    // Build record
+    let s = state.borrow();
+    let rec = ProbeRecord {
+        host: s.host.clone(),
+        fam: match fam {
+            IpVersion::Ipv4 => "IPv4",
+            IpVersion::Ipv6 => "IPv6",
+            IpVersion::Auto => "Auto",
+            IpVersion::Both => "Both",
+        }
+            .to_string(),
+        peer_addr: peer_addr.to_string(),
 
-    Ok(ProbeOutcome::success())
+        t_start_ms: 0,
+        t_handshake_ok_ms: s.t_handshake_ok_ms,
+        t_end_ms: 0,
+
+        alpn: s.alpn.clone(),
+        http3: Http3Result {
+            attempted: s.h3_attempted,
+            status: s.h3_status,
+        },
+
+        error: s.error.clone(),
+
+        cfg: MinimalConnectionConfigCfg {
+            alpn: cfg.alpn.clone(),
+            verify_peer: cfg.verify_peer,
+            multipath: cfg.multipath,
+            multipath_algorithm: cfg.multipath_algorithm.clone(),
+        },
+    };
+
+    let outcome = if s.t_handshake_ok_ms.is_some() {
+        ProbeOutcome::success()
+    } else {
+        ProbeOutcome::retryable_fail()
+    };
+
+    Ok((rec, outcome))
 }
 
-pub fn extract_status_from_headers(list: &[h3::Header]) -> Option<String> {
-    for h in list {
+/// UDP sender used by tquic for outbound packets.
+struct UdpSender {
+    socket: UdpSocket,
+}
+
+impl PacketSendHandler for UdpSender {
+    fn on_packets_send(&self, pkts: &[(Vec<u8>, PacketInfo)]) -> Result<usize, QuicError> {
+        let mut sent = 0usize;
+        for (buf, info) in pkts {
+            match self.socket.send_to(buf, info.dst) {
+                Ok(_) => sent += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(QuicError::IoError(e.to_string())),
+            }
+        }
+        Ok(sent)
+    }
+}
+
+/// Internal shared state the transport callback updates.
+struct H3State {
+    host: String,
+    path: String,
+
+    // timeline
+    t_start: Instant,
+    t_handshake_ok_ms: Option<u128>,
+
+    // negotiated
+    alpn: Option<String>,
+
+    // http3
+    h3: Option<Http3Connection>,
+    h3_attempted: bool,
+    h3_status: Option<u16>,
+
+    // terminal
+    error: Option<String>,
+    done: bool,
+}
+
+impl H3State {
+    fn new(host: &str, path: &str) -> Self {
+        Self {
+            host: host.to_string(),
+            path: path.to_string(),
+            t_start: Instant::now(),
+            t_handshake_ok_ms: None,
+            alpn: None,
+            h3: None,
+            h3_attempted: false,
+            h3_status: None,
+            error: None,
+            done: false,
+        }
+    }
+}
+
+/// Thin shim so we can hold Rc<TransportCb> but pass Box<dyn TransportHandler>.
+struct HandlerShim {
+    inner: Rc<TransportCb>,
+}
+
+impl TransportHandler for HandlerShim {
+    fn on_conn_created(&mut self, _conn: &mut Connection) {}
+
+    fn on_conn_established(&mut self, conn: &mut Connection) {
+        self.inner.on_conn_established(conn);
+    }
+
+    fn on_conn_closed(&mut self, _conn: &mut Connection) {
+        self.inner.on_conn_closed();
+    }
+
+    fn on_stream_created(&mut self, _conn: &mut Connection, _sid: u64) {}
+
+    fn on_stream_readable(&mut self, conn: &mut Connection, _sid: u64) {
+        self.inner.on_stream_readable(conn);
+    }
+
+    fn on_stream_writable(&mut self, _conn: &mut Connection, _sid: u64) {}
+
+    fn on_stream_closed(&mut self, _conn: &mut Connection, _sid: u64) {}
+
+    fn on_new_token(&mut self, _conn: &mut Connection, _token: Vec<u8>) {}
+}
+
+/// Real logic lives here, but behind Rc so we can keep a handle to the state.
+struct TransportCb {
+    state: Rc<RefCell<H3State>>,
+}
+
+impl TransportCb {
+    fn on_conn_established(&self, conn: &mut Connection) {
+        let mut st = self.state.borrow_mut();
+        if st.t_handshake_ok_ms.is_none() {
+            st.t_handshake_ok_ms = Some(st.t_start.elapsed().as_millis());
+        }
+
+        // If ALPN were exposed, you could set st.alpn here.
+
+        // Initialize H3
+        let mut h3c = match Http3Connection::new_with_quic_conn(conn, &Http3Config::new().unwrap()) {
+            Ok(h) => h,
+            Err(e) => {
+                st.error = Some(format!("h3 init failed: {e:?}"));
+                st.done = true;
+                return;
+            }
+        };
+        st.h3_attempted = true;
+
+        // Create a request stream and send headers (GET)
+        match h3c.stream_new(conn) {
+            Ok(sid) => {
+                let headers = vec![
+                    Header::new(b":method", b"GET"),
+                    Header::new(b":scheme", b"https"),
+                    Header::new(b":authority", st.host.as_bytes()),
+                    Header::new(b":path", st.path.as_bytes()),
+                    Header::new(b"user-agent", b"h3-probe (tquic)"),
+                ];
+                if let Err(e) = h3c.send_headers(conn, sid, &headers, true) {
+                    st.error = Some(format!("h3 send headers error: {e:?}"));
+                    st.done = true;
+                    return;
+                }
+                st.h3 = Some(h3c);
+            }
+            Err(e) => {
+                st.error = Some(format!("h3 stream_new error: {e:?}"));
+                st.done = true;
+            }
+        }
+    }
+
+    fn on_stream_readable(&self, conn: &mut Connection) {
+        // Poll without holding a long-lived mutable borrow to st.h3 to satisfy the borrow checker.
+        loop {
+            // 1) poll event
+            let ev_res = {
+                let mut st = self.state.borrow_mut();
+                let Some(h3) = st.h3.as_mut() else { return };
+                h3.poll(conn)
+            };
+
+            // 2) handle event (now we can borrow st again if needed)
+            match ev_res {
+                Ok((sid, ev)) => match ev {
+                    Http3Event::Headers { headers, .. } => {
+                        if let Some(code) = extract_status(&headers) {
+                            let mut st = self.state.borrow_mut();
+                            st.h3_status = Some(code);
+                        }
+                    }
+                    Http3Event::Data => {
+                        let mut buf = [0u8; 4096];
+                        let mut st = self.state.borrow_mut();
+                        if let Some(h3) = st.h3.as_mut() {
+                            while let Ok(n) = h3.recv_body(conn, sid, &mut buf) {
+                                if n == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Http3Event::Finished => {
+                        let mut st = self.state.borrow_mut();
+                        st.done = true;
+                        return;
+                    }
+                    Http3Event::GoAway | Http3Event::PriorityUpdate | Http3Event::Reset(_) => {}
+                },
+                Err(Http3Error::Done) => break,
+                Err(e) => {
+                    let mut st = self.state.borrow_mut();
+                    st.error = Some(format!("h3 poll error: {e:?}"));
+                    st.done = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    fn on_conn_closed(&self) {
+        self.state.borrow_mut().done = true;
+    }
+}
+
+/// Extract :status from HTTP/3 headers.
+fn extract_status(headers: &[Header]) -> Option<u16> {
+    for h in headers {
         if h.name() == b":status" {
-            return Some(String::from_utf8_lossy(h.value()).to_string());
+            if let Ok(s) = std::str::from_utf8(h.value()) {
+                if let Ok(code) = s.parse::<u16>() {
+                    return Some(code);
+                }
+            }
         }
     }
     None
