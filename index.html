@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About These QUIC/HTTP3 Scans</title>
+    <style>
+      :root {
+        font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        color-scheme: light dark;
+      }
+      body { max-width: 690px; margin: 4rem auto; padding: 0 1rem; }
+      h1 { font-size: 1.6rem; margin-bottom: 0.5rem; }
+      h2 { font-size: 1.1rem; margin-top: 2rem; }
+      code { padding: 0.1rem 0.3rem; border-radius: 4px; background: rgba(127,127,127,.15); }
+      footer { margin-top: 2rem; font-size: 0.9rem; color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>About These QUIC/HTTP/3 Scans</h1>
+    <p>
+      This host is running academic measurements to understand support and behavior of modern Internet protocols
+      (e.g., QUIC and HTTP/3). We perform <strong>lightweight active probes</strong> to check feature availability,
+      interoperability, and reliability across public infrastructure.
+    </p>
+
+    <h2>What we do</h2>
+    <ul>
+      <li>Establish short, low-rate connections to public endpoints.</li>
+      <li>Record minimal technical metadata needed for research.</li>
+      <li>Follow conservative rate limits and avoid service disruption.</li>
+    </ul>
+
+    <h2>Data we may store</h2>
+    <ul>
+      <li>Target domain and IP, connection timing, negotiated protocol versions/ALPN.</li>
+      <li>Non-payload protocol metadata (no application content).</li>
+      <li>Timestamp and basic scan outcome (success, error code).</li>
+    </ul>
+
+    <h2>Opt out</h2>
+    <p>
+      You can opt out any time. Send an email to
+      <a style="white-space: nowrap;" href="mailto:opt-out@quiclab.anonaddy.com?subject=Opt-out%20request&body=Please%20exclude%20the%20following%20domains%20from%20your%20scans%3A%0A%0A-%20example.org%0A-%20sub.example.org">opt-out@quiclab.anonaddy.com</a>
+      with the <strong>domain(s)</strong> you want excluded. Example:
+    </p>
+    <code>Subject: Opt-out request<br />Body: Please exclude the following domains from your scans:</code>
+    <ul>
+      <li><code>example.org</code></li>
+      <li><code>sub.example.org</code></li>
+    </ul>
+    <p>We will add your domain(s) to our blocklist promptly.</p>
+    <p>
+      Opt-out requests will be accepted until <strong>11 November 2025</strong>, the planned end of this study.
+      After this date, no further scans will be conducted.
+    </p>
+
+    <h2>Questions</h2>
+    <p>
+      If you believe your service was misidentified or affected, contact
+      <a style="white-space: nowrap;" href="mailto:opt-out@quiclab.anonaddy.com">opt-out@quiclab.anonaddy.com</a>.
+    </p>
+
+    <footer>
+      Research purpose only. No commercial use. We strive to be good Internet citizens.
+    </footer>
+  </body>
+</html>

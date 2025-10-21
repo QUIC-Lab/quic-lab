@@ -1,0 +1,11 @@
+services:
+  quic-lab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: quic-lab:latest
+    ports: ["8080:80"]
+    dns: ["1.1.1.1","8.8.8.8"]
+    volumes:
+      - ./in:/app/in
+      - ./out:/app/out

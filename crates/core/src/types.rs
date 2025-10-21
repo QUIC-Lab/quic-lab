@@ -12,7 +12,7 @@ pub enum IpVersion {
 
 impl Default for IpVersion {
     fn default() -> Self {
-        IpVersion::Both
+        IpVersion::Auto
     }
 }
 
@@ -92,7 +92,7 @@ fn default_verify_peer() -> bool { true }
 fn default_path() -> String { "/".into() }
 fn user_agent() -> String { "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:143.0) Gecko/20100101 Firefox/143.0".into() }
 fn default_port() -> u16 { 443 }
-fn default_ip_version() -> IpVersion { IpVersion::Both }
+fn default_ip_version() -> IpVersion { IpVersion::Auto }
 
 fn default_handshake_timeout_ms() -> u64 { 4000 }
 fn default_overall_timeout_ms() -> u64 { 8000 }

@@ -1,11 +1,4 @@
-[package]
-name = "quic-lab"
-version = "0.1.0"
-edition = "2024"
-
 [workspace]
 members = ["crates/core", "crates/probes", "crates/runner"]
 default-members = ["crates/runner", "crates/core", "crates/probes"]
 resolver = "2"
-
-[dependencies]

@@ -44,10 +44,10 @@ pub fn run(host: &str, peer_addr: SocketAddr, cfg: &DomainConfig) -> Result<Prob
     qcfg.set_initial_max_streams_uni(cfg.initial_max_streams_uni);
     qcfg.verify_peer(cfg.verify_peer);
 
-    // Resolve key log file path: env var or default "sslkeylogfile.txt"
+    // Resolve key log file path: env var or default "out/sslkeylogfile.txt"
     let keylog_path: PathBuf = match std::env::var_os("SSLKEYLOGFILE") {
         Some(path) => PathBuf::from(path),
-        None => PathBuf::from("sslkeylogfile.txt"),
+        None => PathBuf::from("out/sslkeylogfile.txt"),
     };
 
     // Tell quiche to emit secrets

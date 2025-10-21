@@ -8,7 +8,7 @@ use crate::types::IpVersion;
 pub struct RootConfig {
     /// Probe attempt configurations (tried in order until one succeeds).
     #[serde(default)]
-    pub attempts: Vec<ConnectionConfigConfig>,
+    pub connection_config: Vec<ConnectionConfigConfig>,
 
     /// Scheduler knobs (threads, RPS, burst)
     #[serde(default)]
@@ -195,9 +195,9 @@ pub fn read_config<P: AsRef<Path>>(p: P) -> Result<RootConfig> {
         .with_context(|| format!("reading config file {}", p.as_ref().display()))?;
     let mut root: RootConfig = toml::from_str(&s)
         .with_context(|| format!("parsing TOML config {}", p.as_ref().display()))?;
-    if root.attempts.is_empty() {
+    if root.connection_config.is_empty() {
         // ensure at least one default attempt
-        root.attempts.push(ConnectionConfigConfig::default());
+        root.connection_config.push(ConnectionConfigConfig::default());
     }
     if root.recorder.num_shards == 0 || root.recorder.num_shards > 1024 {
         root.recorder.num_shards = default_num_shards();

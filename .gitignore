@@ -1,8 +1,9 @@
 ### General ###
-/config.toml
-/domains.txt
-/out/results.jsonl
-/sslkeylogfile.txt
+in/config.toml
+in/domains*.txt
+domain_extractor/data/*
+/out/*
+sslkeylogfile.txt
 *.env*
 
 

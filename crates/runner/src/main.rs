@@ -63,8 +63,8 @@ fn main() -> Result<()> {
 
     // CLI: runner [config.toml] [domains.txt]
     let mut args = std::env::args().skip(1);
-    let cfg_path = args.next().unwrap_or_else(|| "config.toml".into());
-    let domains_path = args.next().unwrap_or_else(|| "domains.txt".into());
+    let cfg_path = args.next().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "in/config.toml".into());
+    let domains_path = args.next().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "in/domains.txt".into());
 
     let config_root = read_config(&cfg_path)?;
     let domains = read_domains(&domains_path)?;
@@ -104,7 +104,7 @@ fn main() -> Result<()> {
 
     // Convert attempts from config type -> transport type
     let attempts_typed: Vec<core::types::ConnectionConfigConfig> =
-        config_root.attempts.iter().map(to_types_attempt).collect();
+        config_root.connection_config.iter().map(to_types_attempt).collect();
 
     // Parallel over domains
     domains.par_iter().for_each(|host| {
