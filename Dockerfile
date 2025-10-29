@@ -37,7 +37,7 @@ WORKDIR /app
 RUN useradd -r -u 10001 appuser && mkdir -p /app/in && mkdir -p /app/out && chown -R appuser:appuser /app
 COPY --from=build /app/target/release/${PROJECT_ENTRYPOINT} /app/${PROJECT_NAME}
 
-# nginx config + default index.html
+# index.html for opt out
 COPY ./index.html /var/www/html/index.html
 
 # simple supervisor script
