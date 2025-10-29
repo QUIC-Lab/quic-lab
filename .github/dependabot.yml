@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Cargo Dependencies
+  - package-ecosystem: 'cargo'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      time: '08:00'
+    allow:
+      - dependency-type: 'all'
+
+  # GitHub Actions Dependencies
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      time: '08:00'

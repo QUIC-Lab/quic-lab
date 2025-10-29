@@ -1,10 +1,10 @@
 ### General ###
-.github/
 .git/
+.github/
 .idea/
+domain_extractor/
 in/
 out/
-domain_extractor/
 .gitignore
 .dockerignore
 .env*
