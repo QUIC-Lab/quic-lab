@@ -1,4 +1,6 @@
 [workspace]
-members = ["crates/core", "crates/probes", "crates/runner"]
-default-members = ["crates/runner", "crates/core", "crates/probes"]
-resolver = "2"
+members = [
+    "crates/core",
+    "crates/probes",
+    "crates/runner"
+]
