@@ -16,7 +16,10 @@ pub fn resolve_peer(host: &str, port: u16, family: IpVersion) -> Result<SocketAd
 }
 
 /// Resolve one IPv4 and/or one IPv6 when Both is requested
-pub fn resolve_peers_for_both(host: &str, port: u16) -> Result<(Option<SocketAddr>, Option<SocketAddr>)> {
+pub fn resolve_peers_for_both(
+    host: &str,
+    port: u16,
+) -> Result<(Option<SocketAddr>, Option<SocketAddr>)> {
     let mut v4: Option<SocketAddr> = None;
     let mut v6: Option<SocketAddr> = None;
 
@@ -36,4 +39,34 @@ pub fn resolve_peers_for_both(host: &str, port: u16) -> Result<(Option<SocketAdd
         return Err(anyhow!("no A/AAAA addresses for {host}:{port}"));
     }
     Ok((v4, v6))
+}
+
+/// Resolve per-attempt targets based on IpVersion choice.
+pub fn resolve_targets(
+    host: &str,
+    port: u16,
+    family: IpVersion,
+) -> Result<Vec<(IpVersion, SocketAddr)>> {
+    match family {
+        IpVersion::Both => {
+            let (v4, v6) = resolve_peers_for_both(host, port)?;
+            let mut out = Vec::with_capacity(2);
+            if let Some(a) = v4 {
+                out.push((IpVersion::Ipv4, a));
+            }
+            if let Some(a) = v6 {
+                out.push((IpVersion::Ipv6, a));
+            }
+            Ok(out)
+        }
+        IpVersion::Auto | IpVersion::Ipv4 | IpVersion::Ipv6 => {
+            let a = resolve_peer(host, port, family)?;
+            let fam = if a.is_ipv4() {
+                IpVersion::Ipv4
+            } else {
+                IpVersion::Ipv6
+            };
+            Ok(vec![(fam, a)])
+        }
+    }
 }

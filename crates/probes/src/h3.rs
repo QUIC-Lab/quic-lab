@@ -1,58 +1,205 @@
+use crate::h3::quic::AppProtocol;
 use anyhow::Result;
-
-use core::config::{DelayConfig};
-use core::types::ConnectionConfigConfig;
+use core::config::{ConnectionConfig, DelayConfig, IOConfig};
 use core::recorder::Recorder;
-use core::resolver::{resolve_peer, resolve_peers_for_both};
+use core::resolver::resolve_targets;
 use core::throttle::RateLimit;
-use core::transport::quic;
-use core::types::{IpVersion};
+use core::transport::quic::quic;
 
-/// Try a sequence of connection configs; stop at first success. Every connection config is recorded.
-pub fn probe(
-    host: &str,
-    connection_configs: &[ConnectionConfigConfig],
-    delay: &DelayConfig,
-    rl: &RateLimit,
-    recorder: &Recorder,
-) -> Result<()> {
-    // Go through connection config list
-    for (idx, att) in connection_configs.iter().enumerate() {
-        let fam = att.ip_version;
-        let mut attempt_succeeded = false;
+use log::{debug, error};
+use tquic::h3::connection::Http3Connection;
+use tquic::h3::{Header, Http3Config, Http3Event, NameValue};
+use tquic::Connection;
 
-        // Resolve per attempt/family
-        let targets: Vec<(IpVersion, std::net::SocketAddr)> = match fam {
-            IpVersion::Both => {
-                let (v4, v6) = resolve_peers_for_both(host, att.port)?;
-                let mut v = Vec::with_capacity(2);
-                if let Some(a) = v4 { v.push((IpVersion::Ipv4, a)); }
-                if let Some(a) = v6 { v.push((IpVersion::Ipv6, a)); }
-                v
-            }
-            IpVersion::Auto | IpVersion::Ipv4 | IpVersion::Ipv6 => {
-                let a = resolve_peer(host, att.port, fam)?;
-                vec![(if a.is_ipv4() { IpVersion::Ipv4 } else { IpVersion::Ipv6 }, a)]
+/// HTTP/3 app protocol plugged into the QUIC engine.
+struct H3App {
+    host: String,
+    path: String,
+    user_agent: String,
+
+    h3: Option<Http3Connection>,
+    req_stream: Option<u64>,
+
+    // simple state for result extraction
+    status: Option<u16>,
+    headers_seen: bool,
+}
+
+impl H3App {
+    fn new(host: &str, path: &str, user_agent: &str) -> Self {
+        Self {
+            host: host.to_string(),
+            path: path.to_string(),
+            user_agent: user_agent.to_string(),
+            h3: None,
+            req_stream: None,
+            status: None,
+            headers_seen: false,
+        }
+    }
+}
+
+impl AppProtocol for H3App {
+    fn on_connected(&mut self, conn: &mut Connection) {
+        // Initialize H3 over QUIC and send a minimal GET request.
+        let h3_cfg = match Http3Config::new() {
+            Ok(c) => c,
+            Err(e) => {
+                error!("http3 config error: {:?}", e);
+                let _ = conn.close(true, 0x1, b"h3cfg");
+                return;
             }
         };
 
-        for (fam_eff, addr) in targets {
-            rl.until_ready();
-
-            let (rec, outcome) = quic::run(host, addr, fam_eff, att)?;
-            recorder.write(&rec);
-
-            if !outcome.retryable {
-                attempt_succeeded = true;
-                break;
+        let mut h3 = match Http3Connection::new_with_quic_conn(conn, &h3_cfg) {
+            Ok(h) => h,
+            Err(e) => {
+                error!("http3 init error: {:?}", e);
+                let _ = conn.close(true, 0x1, b"h3init");
+                return;
             }
+        };
+
+        let sid = match h3.stream_new(conn) {
+            Ok(s) => s,
+            Err(e) => {
+                error!("http3 stream_new error: {:?}", e);
+                let _ = conn.close(true, 0x1, b"h3sid");
+                return;
+            }
+        };
+
+        // Build request headers.
+        let headers = [
+            Header::new(b":method", b"GET"),
+            Header::new(b":scheme", b"https"),
+            Header::new(b":authority", self.host.as_bytes()),
+            Header::new(b":path", self.path.as_bytes()),
+            Header::new(b"user-agent", self.user_agent.as_bytes()),
+            Header::new(b"accept", b"*/*"),
+        ];
+
+        if let Err(e) = h3.send_headers(conn, sid, &headers, true /* fin: no body */) {
+            error!("send_headers error: {:?}", e);
+            let _ = conn.close(true, 0x1, b"hdr");
+            return;
         }
 
-        // Stop at first successful attempt
+        self.h3 = Some(h3);
+        self.req_stream = Some(sid);
+    }
+
+    fn on_stream_readable(&mut self, conn: &mut Connection, _stream_id: u64) {
+        // Drive H3 by polling events until Done.
+        let Some(h3) = self.h3.as_mut() else {
+            return;
+        };
+
+        loop {
+            let ev = match h3.poll(conn) {
+                Ok(ev) => ev,
+                Err(e) => {
+                    // Http3Error::Done => no more events now.
+                    debug!("h3.poll: {:?}", e);
+                    break;
+                }
+            };
+
+            let (sid, event) = ev;
+            match event {
+                Http3Event::Headers { headers, fin } => {
+                    // extract :status
+                    for hdr in headers.iter() {
+                        if hdr.name() == b":status" {
+                            if let Ok(s) = std::str::from_utf8(hdr.value()) {
+                                if let Ok(code) = s.parse::<u16>() {
+                                    self.status = Some(code);
+                                }
+                            }
+                        }
+                    }
+                    self.headers_seen = true;
+
+                    // if headers carried FIN, there is no body
+                    if fin {
+                        let _ = h3.stream_close(conn, sid);
+                        let _ = conn.close(true, 0x00, b"ok");
+                    }
+                }
+
+                Http3Event::Data => {
+                    // drain body
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match h3.recv_body(conn, sid, &mut buf) {
+                            Ok(0) => break,
+                            Ok(_n) => { /* discard */ }
+                            Err(_e) => break, // Done or error
+                        }
+                    }
+                }
+
+                Http3Event::Finished => {
+                    let _ = h3.stream_close(conn, sid);
+                    let _ = conn.close(true, 0x00, b"ok");
+                }
+
+                _ => { /* ignore other events for probing */ }
+            }
+        }
+    }
+
+    fn on_stream_writable(&mut self, _conn: &mut Connection, _stream_id: u64) {
+        // Not used for GET without body.
+    }
+
+    fn on_stream_closed(&mut self, _conn: &mut Connection, _stream_id: u64) {}
+
+    fn on_conn_closed(&mut self, _conn: &mut Connection) {
+        // Hook for recording if needed later. `self.status` has the HTTP code.
+        debug!("h3 finished, status = {:?}", self.status);
+    }
+}
+
+/// Try a sequence of connection configs; stop at first success. Every config is attempted.
+pub fn probe(
+    host: &str,
+    io_config: &IOConfig,
+    connection_configs: &[ConnectionConfig],
+    delay: &DelayConfig,
+    rl: &RateLimit,
+    _recorder: &Recorder,
+) -> Result<()> {
+    for (idx, att) in connection_configs.iter().enumerate() {
+        // Centralized resolution
+        let targets = resolve_targets(host, att.port, att.ip_version)?;
+
+        let mut attempt_succeeded = false;
+
+        for (_fam_eff, addr) in targets {
+            rl.until_ready();
+
+            // Build the HTTP/3 app and open a QUIC connection that will drive it.
+            let app = Box::new(H3App::new(host, &att.path, &att.user_agent));
+
+            // NOTE: business logic of core’s event loop remains unchanged.
+            if let Err(e) = quic::open_connection(host, &addr, io_config, att, app) {
+                error!("[{}] connect {} err: {e:?}", host, addr);
+                continue;
+            }
+
+            // If we reached here cleanly, count as success for this address.
+            attempt_succeeded = true;
+            // For probing you may choose to continue to the other family, but we stop on first success.
+            break;
+        }
+
         if attempt_succeeded {
             break;
         } else if idx + 1 < connection_configs.len() && delay.inter_attempt_delay_ms > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(delay.inter_attempt_delay_ms));
+            std::thread::sleep(std::time::Duration::from_millis(
+                delay.inter_attempt_delay_ms,
+            ));
         }
     }
 

@@ -1,11 +1,13 @@
 # Domain Extractor
 
-Extracts unique **second-level domains (SLDs)** from very large **TLD zone files** (`.txt`, `.gz`, `.txt.gz`), optionally filters them using public **blacklists** (Firebog), and writes:
+Extracts unique **second-level domains (SLDs)** from very large **TLD zone files** (`.txt`, `.gz`, `.txt.gz`), optionally filters them using public *
+*blacklists** (Firebog), and writes:
 
 * `domains.txt` (or `domains_filtered.txt` in filter-only mode)
 * `metrics.json` with **per-TLD counts, timings, and throughput**, and overall totals
 
-The script is **stdlib-only** (no `pip install`), streams files line-by-line, deduplicates via a temporary **SQLite** store, and shows a **compact, low-overhead progress line** (percent by bytes + domains/sec + elapsed).
+The script is **stdlib-only** (no `pip install`), streams files line-by-line, deduplicates via a temporary **SQLite** store, and shows a **compact,
+low-overhead progress line** (percent by bytes + domains/sec + elapsed).
 
 ![python](https://img.shields.io/badge/python-3.9%2B-blue) ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey) ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -169,10 +171,12 @@ www.api.example.com  ->  example.com
 
 ## How It Works
 
-* **Streaming I/O** – files are read line-by-line. For `.gz`, parsing is via `gzip` (single-threaded); progress is based on the **compressed** stream position.
+* **Streaming I/O** – files are read line-by-line. For `.gz`, parsing is via `gzip` (single-threaded); progress is based on the **compressed** stream
+  position.
 * **Parsing** – lightweight path avoids regex in the hot loop (regex only for `$ORIGIN`).
 * **Deduplication** – a temporary **SQLite** DB (in your OS temp dir) acts as a set (`PRIMARY KEY(domain)`), with large batched inserts for speed.
-* **Blacklist** – Firebog index pages are fetched; each referenced hosts list is parsed; domains are blocked by **suffix match** (a listed domain blocks all its subdomains).
+* **Blacklist** – Firebog index pages are fetched; each referenced hosts list is parsed; domains are blocked by **suffix match** (a listed domain
+  blocks all its subdomains).
 
 ---
 
@@ -206,15 +210,18 @@ www.api.example.com  ->  example.com
   ```
 * **NVMe SSD** helps most; network fetch for blacklists is usually minor.
 * **Tune batch size**: the script uses a large `BATCH_SIZE` for SQLite inserts; you can increase/decrease it in code.
-* **Progress overhead** is already low; if you want even leaner UI, adjust the throttling constants in `_iter_lines_bytes_progress_{txt,gz}` (`min_time_step`, `min_bytes_step`) or the `Progress(min_interval=...)` argument.
+* **Progress overhead** is already low; if you want even leaner UI, adjust the throttling constants in `_iter_lines_bytes_progress_{txt,gz}` (
+  `min_time_step`, `min_bytes_step`) or the `Progress(min_interval=...)` argument.
 
 ---
 
 ## Caveats & Assumptions
 
-* **SLD definition:** outputs the **immediate child** of the TLD (no Public Suffix List logic). If you need PSL-aware registrable domains (e.g., `co.uk`), open an issue/PR.
+* **SLD definition:** outputs the **immediate child** of the TLD (no Public Suffix List logic). If you need PSL-aware registrable domains (e.g.,
+  `co.uk`), open an issue/PR.
 * **Apex lines** (`@` / the TLD itself) are ignored by design.
-* **SQLite tmp file** lives in your OS temp directory and is deleted at the end. With `PRAGMA synchronous=OFF`, a sudden crash can lose the current batch (re-run is safe).
+* **SQLite tmp file** lives in your OS temp directory and is deleted at the end. With `PRAGMA synchronous=OFF`, a sudden crash can lose the current
+  batch (re-run is safe).
 * **Encoding:** input decoded as UTF-8 with `errors="replace"` to survive odd bytes.
 * **Proxy support:** `urllib` honors standard env vars (`HTTP_PROXY`, `HTTPS_PROXY`, etc.).
 
@@ -223,7 +230,8 @@ www.api.example.com  ->  example.com
 ## Troubleshooting
 
 **Progress stuck at 0% on `.gz`**
-Make sure you didn’t alter the gzip iterator internals; the script uses the **compressed** stream position for percent. If you changed the code, ensure that `_iter_lines_bytes_progress_gz` tracks `comp.tell()` and that the progress bar’s `total` is `path.stat().st_size` for `.gz`.
+Make sure you didn’t alter the gzip iterator internals; the script uses the **compressed** stream position for percent. If you changed the code,
+ensure that `_iter_lines_bytes_progress_gz` tracks `comp.tell()` and that the progress bar’s `total` is `path.stat().st_size` for `.gz`.
 
 **“No .txt/.gz files found”**
 Check the path and permissions.
@@ -235,7 +243,8 @@ Expected while parsing `.gz` (gzip is single-threaded). Try pre-decompressing to
 It should stay modest. If you see spikes, lower `BATCH_SIZE` in the source.
 
 **Windows console artifacts**
-Use Windows Terminal/PowerShell and ensure UTF-8; the progress line uses `█` and `·` characters only in some code paths (compact mode is mostly plain text).
+Use Windows Terminal/PowerShell and ensure UTF-8; the progress line uses `█` and `·` characters only in some code paths (compact mode is mostly plain
+text).
 
 ---
 
@@ -245,7 +254,7 @@ Issues and PRs welcome! Ideas:
 
 * Threaded blacklist fetch
 * PSL-aware extraction or configurable domain depth
-* Optional multi-process parsing for `.txt` via byte-range sharding
+* Optional multiprocess parsing for `.txt` via byte-range sharding
 * CSV/Parquet export for metrics and domains
 
 To hack on it:

@@ -4,3 +4,4 @@ members = [
     "crates/probes",
     "crates/runner"
 ]
+resolver = "3"

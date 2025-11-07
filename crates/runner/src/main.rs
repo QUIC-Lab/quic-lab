@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use core::config::read_config;
-use core::logging::init_default_logging;
 use core::recorder::Recorder;
 use core::throttle::RateLimit;
 use rayon::prelude::*;
@@ -24,9 +23,9 @@ fn read_domains<P: AsRef<Path>>(p: P) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Convert connection config -> transport/recording ConnectionConfigConfig.
-fn to_types_attempt(att: &core::config::ConnectionConfigConfig) -> core::types::ConnectionConfigConfig {
-    core::types::ConnectionConfigConfig {
+/// Convert connection config -> transport/recording ConnectionConfig.
+fn to_types_attempt(att: &core::config::ConnectionConfig) -> core::config::ConnectionConfig {
+    core::config::ConnectionConfig {
         // network + family
         port: att.port,
         ip_version: att.ip_version,
@@ -41,8 +40,6 @@ fn to_types_attempt(att: &core::config::ConnectionConfigConfig) -> core::types::
 
         // timeouts
         max_idle_timeout_ms: att.max_idle_timeout_ms,
-        handshake_timeout_ms: att.handshake_timeout_ms,
-        overall_timeout_ms: att.overall_timeout_ms,
 
         // flow control
         initial_max_data: att.initial_max_data,
@@ -53,29 +50,43 @@ fn to_types_attempt(att: &core::config::ConnectionConfigConfig) -> core::types::
         initial_max_streams_uni: att.initial_max_streams_uni,
 
         // multipath
-        multipath: att.enable_multipath,
-        multipath_algorithm: Option::from(att.multipath_algorithm.clone()),
+        max_ack_delay: 0,
+        active_connection_id_limit: 0,
+        send_udp_payload_size: 0,
+        enable_multipath: att.enable_multipath,
+        multipath_algorithm: att.multipath_algorithm.clone(),
+
+        max_receive_buffer_size: att.max_receive_buffer_size,
     }
 }
 
 fn main() -> Result<()> {
-    init_default_logging();
-
-    // CLI: runner [config.toml] [domains.txt]
+    // CLI: runner [config.toml]
     let mut args = std::env::args().skip(1);
-    let cfg_path = args.next().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "in/config.toml".into());
-    let domains_path = args.next().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "in/domains.txt".into());
-
+    let cfg_path = args
+        .next()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "in/config.toml".into());
     let config_root = read_config(&cfg_path)?;
+    let domains_path =
+        PathBuf::from(&config_root.io.in_dir).join(&config_root.io.domains_file_name);
+
+    // Initialize logging.
+    env_logger::builder()
+        .filter_level(config_root.general.log_level)
+        .init();
+    // init_default_logging();
+
     let domains = read_domains(&domains_path)?;
     if domains.is_empty() {
-        return Err(anyhow!("no domains found in {}", domains_path));
+        return Err(anyhow!("no domains found in {}", domains_path.display()));
     }
 
     // JSONL recorder (change path if you have it in config)
-    let mut path = PathBuf::from(&config_root.recorder.out_dir);
-    path.push(&config_root.recorder.results_file_name);
+    let mut path =
+        PathBuf::from(&config_root.io.out_dir).join(&config_root.io.results_file_name_prefix);
     path.set_extension("jsonl");
+
     // Make sure the parent directory exists
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?; // create all directories if missing
@@ -103,15 +114,19 @@ fn main() -> Result<()> {
     );
 
     // Convert attempts from config type -> transport type
-    let attempts_typed: Vec<core::types::ConnectionConfigConfig> =
-        config_root.connection_config.iter().map(to_types_attempt).collect();
+    let attempts_typed: Vec<core::config::ConnectionConfig> = config_root
+        .connection_config
+        .iter()
+        .map(to_types_attempt)
+        .collect();
 
     // Parallel over domains
     domains.par_iter().for_each(|host| {
         if let Err(e) = probes::h3::probe(
-            host,
-            &attempts_typed,   // &[core::types::ConnectionConfigConfig]
-            &config_root.delay,      // your delay/cooldown struct
+            host, // &[core::config::ConnectionConfig]
+            &config_root.io,
+            &attempts_typed,
+            &config_root.delay, // your delay/cooldown struct
             &rl,
             &recorder,
         ) {

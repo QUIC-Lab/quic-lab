@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 core = { path = "../core" }
 anyhow = "1"
+log = "0.4.28"
+tquic = { version = "1", features = ["h3"] }

@@ -8,3 +8,4 @@ core = { path = "../core" }
 probes = { path = "../probes" }
 anyhow = "1"
 rayon = "1.10"
+env_logger = "0"
