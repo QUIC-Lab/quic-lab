@@ -13,7 +13,7 @@ import urllib.request
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Optional, Set, Tuple, Iterator
+from typing import Iterable, Iterator, Optional, Set, Tuple
 
 
 # --- Progressbar & timers (stdlib-only) ---
@@ -482,7 +482,7 @@ def extract_domains_from_zone(path: Path, tld: str) -> Iterable[str]:
     """
     origin = tld  # default origin is the zone itself
     for raw in open_zone_file(path):
-        # super fast skips before regex:
+        # superfast skips before regex:
         s = raw.lstrip()
         if not s or s[0] == ';':  # comment/empty
             continue
@@ -617,7 +617,7 @@ def mode_extract_and_filter(folder: Path, out_file: Path, metrics_path: Path, in
     totals["extracted_per_second"] = round((totals["extracted"] / total_seconds) if total_seconds > 0 else 0.0, 3)
     totals["kept_per_second"] = round((totals["kept"] / total_seconds) if total_seconds > 0 else 0.0, 3)
 
-    metrics = {"per_tld": per_tld_counts, "totals": totals, "times": {"per_tld_seconds": times_per_tld, "total_seconds": total_seconds},
+    metrics = {"per_tld":     per_tld_counts, "totals": totals, "times": {"per_tld_seconds": times_per_tld, "total_seconds": total_seconds},
                "output_file": str(out_file)}
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
@@ -713,7 +713,7 @@ def mode_extract_only(folder: Path, out_file: Path, metrics_path: Path) -> None:
     totals["extracted_per_second"] = round((totals["extracted"] / total_seconds) if total_seconds > 0 else 0.0, 3)
     totals["kept_per_second"] = round((totals["kept"] / total_seconds) if total_seconds > 0 else 0.0, 3)
 
-    metrics = {"per_tld": per_tld_counts, "totals": totals, "times": {"per_tld_seconds": times_per_tld, "total_seconds": total_seconds},
+    metrics = {"per_tld":     per_tld_counts, "totals": totals, "times": {"per_tld_seconds": times_per_tld, "total_seconds": total_seconds},
                "output_file": str(out_file)}
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
@@ -814,7 +814,7 @@ def mode_filter_only(folder: Path, in_file: Path, out_file: Path, metrics_path: 
     totals["kept_per_second"] = round((totals["kept"] / total_seconds) if total_seconds > 0 else 0.0, 3)
 
     metrics = {"per_tld": per_tld_counts, "totals": totals, "times": {"per_tld_seconds": {},  # not tracked in filter-only mode
-                                                                      "total_seconds": total_seconds}, "output_file": str(out_file)}
+                                                                      "total_seconds":   total_seconds}, "output_file": str(out_file)}
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
     print("\n=== Metrics ===")

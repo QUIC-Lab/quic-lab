@@ -6,7 +6,7 @@ nginx -g 'daemon off;' &
 NGINX_PID=$!
 
 # run Rust app as dedicated non-root user
-su -s /bin/sh appuser -c "/app/quic-lab${1:+ \"\$@\"}" &
+su -s /bin/sh appuser -c '/app/quic-lab "$@"' -- "$@" &
 APP_PID=$!
 
 term() { kill -TERM "$NGINX_PID" "$APP_PID" 2>/dev/null || true; }

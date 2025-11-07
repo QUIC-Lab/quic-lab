@@ -6,7 +6,7 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/quic-lab/quic-lab
     ports:
-      - "8080:80"     # Adjust depending on available ports on the host
+      - "80:80"       # Adjust depending on available ports on the host
       - "[::]:80:80"  # Adjust depending on available ports on the host
     dns:
       - "1.1.1.1"
