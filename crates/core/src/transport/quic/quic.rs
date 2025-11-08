@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use std::cell::RefCell;
 use std::fs;
 use std::net::SocketAddr;
@@ -30,6 +32,7 @@ use tquic::TlsConfig;
 use tquic::TransportHandler;
 
 use crate::config::{ConnectionConfig, IOConfig};
+use crate::shard2;
 use crate::transport::quic::QuicSocket;
 use crate::transport::quic::Result;
 
@@ -65,6 +68,7 @@ struct Client {
 
 impl Client {
     fn new(
+        host: &str,
         connection_config: &ConnectionConfig,
         io_config: &IOConfig,
         socket_addr: &SocketAddr,
@@ -100,7 +104,7 @@ impl Client {
         config.set_tls_config(tls_config);
 
         let context = Rc::new(RefCell::new(ClientContext { finish: false }));
-        let handlers = ClientHandler::new(io_config, context.clone(), app);
+        let handlers = ClientHandler::new(io_config, host, context.clone(), app);
 
         let poll = mio::Poll::new()?;
         let registry = poll.registry();
@@ -175,9 +179,10 @@ impl ClientContext {
 }
 
 struct ClientHandler {
-    session_dir: PathBuf,
-    keylog_dir: PathBuf,
-    qlog_dir: PathBuf,
+    host: String,
+    session_root: PathBuf,
+    keylog_root: PathBuf,
+    qlog_root: PathBuf,
     context: Rc<RefCell<ClientContext>>,
     app: Box<dyn AppProtocol>,
 }
@@ -185,23 +190,25 @@ struct ClientHandler {
 impl ClientHandler {
     fn new(
         option: &IOConfig,
+        host: &str,
         context: Rc<RefCell<ClientContext>>,
         app: Box<dyn AppProtocol>,
     ) -> Self {
         let base = PathBuf::from(&option.out_dir);
-        let session_dir = base.join("session_files");
-        let keylog_dir = base.join("keylog_files");
-        let qlog_dir = base.join("qlog_files");
+        let session_root = base.join("session_files");
+        let keylog_root = base.join("keylog_files");
+        let qlog_root = base.join("qlog_files");
 
         // Create folders if not exist
-        let _ = fs::create_dir_all(&session_dir);
-        let _ = fs::create_dir_all(&keylog_dir);
-        let _ = fs::create_dir_all(&qlog_dir);
+        let _ = fs::create_dir_all(&session_root);
+        let _ = fs::create_dir_all(&keylog_root);
+        let _ = fs::create_dir_all(&qlog_root);
 
         Self {
-            session_dir,
-            keylog_dir,
-            qlog_dir,
+            host: host.to_string(),
+            session_root,
+            keylog_root,
+            qlog_root,
             context,
             app,
         }
@@ -214,7 +221,9 @@ impl TransportHandler for ClientHandler {
         let id = conn.trace_id().to_string();
 
         // session resume
-        let session_path = self.session_dir.join(format!("{id}.session"));
+        let sdir = shard2(&self.session_root, &id);
+        let _ = fs::create_dir_all(&sdir);
+        let session_path = sdir.join(format!("{id}.session"));
         if let Ok(session) = fs::read(&session_path) {
             if conn.set_session(&session).is_err() {
                 error!("{} session resumption failed", id);
@@ -222,25 +231,34 @@ impl TransportHandler for ClientHandler {
         }
 
         // keylog
-        let keylog_path = self.keylog_dir.join(format!("{id}.keylog")); // TODO: Why .keylog?
-        if let Ok(file) = fs::OpenOptions::new()
+        let kdir = shard2(&self.keylog_root, &id);
+        let _ = fs::create_dir_all(&kdir);
+        let keylog_path = kdir.join(format!("{id}.keylog"));
+        if let Ok(keylog) = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&keylog_path)
         {
-            conn.set_keylog(Box::new(file));
+            conn.set_keylog(Box::new(keylog));
         } else {
             error!("{} set key log failed", id);
         }
 
         // qlog
-        let qlog_path = self.qlog_dir.join(format!("{id}.qlog")); // TODO: Why .qlog?
+        let qdir = shard2(&self.qlog_root, &id);
+        let _ = fs::create_dir_all(&qdir);
+        let qlog_path = qdir.join(format!("{id}.qlog.ndjson.gz"));
         if let Ok(qlog) = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&qlog_path)
         {
-            conn.set_qlog(Box::new(qlog), "client qlog".into(), format!("id={id}"));
+            let gz = GzEncoder::new(qlog, Compression::fast());
+            conn.set_qlog(
+                Box::new(gz),
+                "client qlog".into(),
+                format!("host={} id={}", self.host, id),
+            );
         } else {
             error!("{} set qlog failed", id);
         }
@@ -258,7 +276,7 @@ impl TransportHandler for ClientHandler {
 
         // Persist session
         let session_path = self
-            .session_dir
+            .session_root
             .join(format!("{}.session", conn.trace_id()));
         if let Some(session) = conn.session() {
             let _ = fs::write(&session_path, session);
@@ -288,20 +306,20 @@ impl TransportHandler for ClientHandler {
 }
 
 pub fn open_connection(
-    server_name: &str,
+    host: &str,
     socket_addr: &SocketAddr,
     io_config: &IOConfig,
     connection_config: &ConnectionConfig,
     app: Box<dyn AppProtocol>,
 ) -> Result<()> {
     // Create client.
-    let mut client = Client::new(connection_config, io_config, socket_addr, app)?;
+    let mut client = Client::new(host, connection_config, io_config, socket_addr, app)?;
 
     // Connect to server.
     client.endpoint.connect(
         client.sock.local_addr(),
         socket_addr.clone(),
-        Option::from(server_name),
+        Option::from(host),
         None,
         None,
         None,

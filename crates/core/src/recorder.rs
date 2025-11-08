@@ -1,30 +1,51 @@
-use std::fs::{OpenOptions};
+use anyhow::Result;
+use serde::Serialize;
+use std::fs::{self, create_dir_all, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
 
-use crate::types::ProbeRecord;
+use crate::shard2;
 
-/// Very simple JSONL file writer that is safe to call from many threads.
 #[derive(Clone)]
 pub struct Recorder {
-    inner: Arc<Mutex<BufWriter<std::fs::File>>>,
+    root: PathBuf,
+    ext: &'static str,
 }
 
 impl Recorder {
-    pub fn open<P: AsRef<Path>>(p: P) -> anyhow::Result<Self> {
-        let file = OpenOptions::new().create(true).append(true).open(p)?;
-        Ok(Self {
-            inner: Arc::new(Mutex::new(BufWriter::new(file))),
-        })
+    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
+        let root = root.as_ref().join("recorder_files");
+        create_dir_all(&root)?;
+        Ok(Self { root, ext: "json" })
     }
 
-    pub fn write(&self, rec: &ProbeRecord) {
-        if let Ok(line) = serde_json::to_string(rec) {
-            if let Ok(mut w) = self.inner.lock() {
-                let _ = w.write_all(line.as_bytes());
-                let _ = w.write_all(b"\n");
-            }
+    /// Compute the final path for a given key (e.g. trace_id).
+    pub fn path_for_key(&self, key: &str) -> PathBuf {
+        shard2(&self.root, key).join(format!("{key}.{}", self.ext))
+    }
+
+    /// Atomically write one JSON file per key, matching qlog’s sharded layout.
+    pub fn write_for_key<T: Serialize>(&self, key: &str, value: &T) -> Result<PathBuf> {
+        let dir = shard2(&self.root, key);
+        create_dir_all(&dir)?;
+
+        let path = dir.join(format!("{key}.{}", self.ext));
+        let tmp = dir.join(format!("{key}.tmp-{}", std::process::id()));
+
+        let data = serde_json::to_vec(value)?;
+        {
+            let f = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)?;
+            let mut w = BufWriter::new(f);
+            w.write_all(&data)?;
+            w.flush()?;
         }
+        // Single writer per trace_id → rename is fine. Same-dir rename is atomic.
+        fs::rename(&tmp, &path)?;
+
+        Ok(path)
     }
 }

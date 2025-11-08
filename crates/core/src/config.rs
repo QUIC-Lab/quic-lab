@@ -87,14 +87,6 @@ pub struct IOConfig {
     /// Output directory; created if missing
     #[serde(default = "default_out_dir")]
     pub out_dir: String,
-
-    /// File prefix (files are sharded as {prefix}-{shard:03}.jsonl)
-    #[serde(default = "default_results_file_name_prefix")]
-    pub results_file_name_prefix: String,
-
-    /// Number of shard files to write in parallel (1...=1024)
-    #[serde(default = "default_num_shards")]
-    pub num_shards: usize,
 }
 
 impl Default for IOConfig {
@@ -103,8 +95,6 @@ impl Default for IOConfig {
             in_dir: default_in_dir(),
             domains_file_name: default_domains_file_name(),
             out_dir: default_out_dir(),
-            results_file_name_prefix: default_results_file_name_prefix(),
-            num_shards: default_num_shards(),
         }
     }
 }
@@ -291,12 +281,6 @@ fn default_domains_file_name() -> String {
 fn default_out_dir() -> String {
     "out".into()
 }
-fn default_results_file_name_prefix() -> String {
-    "results".into()
-}
-fn default_num_shards() -> usize {
-    8
-}
 fn default_log_level() -> log::LevelFilter {
     log::LevelFilter::Info
 }
@@ -311,9 +295,6 @@ pub fn read_config<P: AsRef<Path>>(p: P) -> Result<RootConfig> {
     if root.connection_config.is_empty() {
         // ensure at least one default attempt
         root.connection_config.push(ConnectionConfig::default());
-    }
-    if root.io.num_shards == 0 || root.io.num_shards > 1024 {
-        root.io.num_shards = default_num_shards();
     }
     Ok(root)
 }

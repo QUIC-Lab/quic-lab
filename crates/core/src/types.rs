@@ -1,5 +1,6 @@
 use crate::config::ConnectionConfig;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 /// Which IP family to use when probing (config values: "auto", "ipv4", "ipv6", "both").
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -66,4 +67,24 @@ pub fn family_label(f: IpVersion) -> &'static str {
         IpVersion::Ipv6 => "IPv6",
         IpVersion::Both => "Both",
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct MetaRecord {
+    pub host: String,
+    pub peer_addr: SocketAddr,
+    pub alpn: Option<String>,
+    pub handshake_ok: bool,
+    pub local_close: Option<String>,
+    pub peer_close: Option<String>,
+    pub stats: Option<BasicStats>,
+}
+#[derive(serde::Serialize)]
+pub struct BasicStats {
+    pub bytes_sent: u64,
+    pub bytes_recv: u64,
+    pub bytes_lost: u64,
+    pub packets_sent: u64,
+    pub packets_recv: u64,
+    pub packets_lost: u64,
 }

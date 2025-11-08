@@ -12,9 +12,7 @@ inter_attempt_delay_ms = 200
 in_dir = "in"
 domains_file_name = "domains.txt"
 out_dir = "out"
-results_file_name_prefix = "results"
-
-num_shards = 16
+log_level = "info"  # OFF/ERROR/WARN/INFO/DEBUG/TRACE
 
 
 # connection_configs are tried in order until first success. You can add many.

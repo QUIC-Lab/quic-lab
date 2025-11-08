@@ -15,3 +15,4 @@ log = { version = "0.4", features = ["serde"] }
 mio = { version = "1", features = ["net", "os-poll"] }
 rustc-hash = "2"
 slab = "0"
+flate2 = "1.1.5"
