@@ -9,10 +9,12 @@ burst = 200
 inter_attempt_delay_ms = 200
 
 [general]
+log_level = "info"  # OFF/ERROR/WARN/INFO/DEBUG/TRACE
+
+[io]
 in_dir = "in"
 domains_file_name = "domains.txt"
 out_dir = "out"
-log_level = "info"  # OFF/ERROR/WARN/INFO/DEBUG/TRACE
 
 
 # connection_configs are tried in order until first success. You can add many.
