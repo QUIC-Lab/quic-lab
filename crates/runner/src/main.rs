@@ -47,7 +47,7 @@ fn main() -> Result<()> {
     }
 
     // Recorder (one file per trace_id), colocated with qlog
-    let recorder = Recorder::new(&cfg.io.out_dir)?;
+    let recorder = Recorder::new(&cfg.io.out_dir, cfg.general.save_recorder_files)?;
 
     // Thread pool sizing
     let threads = if cfg.scheduler.concurrency == 0 {
@@ -137,9 +137,10 @@ fn main() -> Result<()> {
     domains.par_iter().for_each(|host| {
         if let Err(e) = probes::h3::probe(
             host,
+            &cfg.scheduler,
             &cfg.io,
+            &cfg.general,
             &cfg.connection_config,
-            &cfg.delay,
             &rl,
             &recorder,
         ) {

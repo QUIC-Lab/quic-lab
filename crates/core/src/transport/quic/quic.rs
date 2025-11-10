@@ -31,10 +31,12 @@ use tquic::PacketInfo;
 use tquic::TlsConfig;
 use tquic::TransportHandler;
 
-use crate::config::{ConnectionConfig, IOConfig};
+use crate::config::{ConnectionConfig, GeneralConfig, IOConfig};
+use crate::recorder::Recorder;
 use crate::shard2;
 use crate::transport::quic::QuicSocket;
 use crate::transport::quic::Result;
+use crate::types::{BasicStats, MetaRecord};
 
 /// Application protocol hook that runs on top of QUIC.
 /// Implementations may drive HTTP/3, HTTP/0.9, or anything else.
@@ -69,9 +71,11 @@ struct Client {
 impl Client {
     fn new(
         host: &str,
-        connection_config: &ConnectionConfig,
-        io_config: &IOConfig,
         socket_addr: &SocketAddr,
+        io_config: &IOConfig,
+        general_config: &GeneralConfig,
+        connection_config: &ConnectionConfig,
+        recorder: &Recorder,
         app: Box<dyn AppProtocol>,
     ) -> Result<Self> {
         let mut config = Config::new()?;
@@ -104,7 +108,15 @@ impl Client {
         config.set_tls_config(tls_config);
 
         let context = Rc::new(RefCell::new(ClientContext { finish: false }));
-        let handlers = ClientHandler::new(io_config, host, context.clone(), app);
+        let handlers = ClientHandler::new(
+            host,
+            socket_addr,
+            io_config,
+            general_config,
+            recorder,
+            context.clone(),
+            app,
+        );
 
         let poll = mio::Poll::new()?;
         let registry = poll.registry();
@@ -180,24 +192,41 @@ impl ClientContext {
 
 struct ClientHandler {
     host: String,
+    peer_addr: SocketAddr,
     session_root: PathBuf,
     keylog_root: PathBuf,
     qlog_root: PathBuf,
+    recorder: Recorder,
     context: Rc<RefCell<ClientContext>>,
     app: Box<dyn AppProtocol>,
 }
 
 impl ClientHandler {
     fn new(
-        option: &IOConfig,
         host: &str,
+        peer_addr: &SocketAddr,
+        io_config: &IOConfig,
+        general_config: &GeneralConfig,
+        recorder: &Recorder,
         context: Rc<RefCell<ClientContext>>,
         app: Box<dyn AppProtocol>,
     ) -> Self {
-        let base = PathBuf::from(&option.out_dir);
-        let session_root = base.join("session_files");
-        let keylog_root = base.join("keylog_files");
-        let qlog_root = base.join("qlog_files");
+        let base = PathBuf::from(&io_config.out_dir);
+        let session_root = if general_config.save_session_files {
+            base.join("session_files")
+        } else {
+            PathBuf::new()
+        };
+        let keylog_root = if general_config.save_keylog_files {
+            base.join("keylog_files")
+        } else {
+            PathBuf::new()
+        };
+        let qlog_root = if general_config.save_qlog_files {
+            base.join("qlog_files")
+        } else {
+            PathBuf::new()
+        };
 
         // Create folders if not exist
         let _ = fs::create_dir_all(&session_root);
@@ -206,9 +235,11 @@ impl ClientHandler {
 
         Self {
             host: host.to_string(),
+            peer_addr: peer_addr.clone(),
             session_root,
             keylog_root,
             qlog_root,
+            recorder: recorder.clone(),
             context,
             app,
         }
@@ -220,66 +251,123 @@ impl TransportHandler for ClientHandler {
         debug!("{} connection is created", conn.trace_id());
         let id = conn.trace_id().to_string();
 
-        // session resume
-        let sdir = shard2(&self.session_root, &id);
-        let _ = fs::create_dir_all(&sdir);
-        let session_path = sdir.join(format!("{id}.session"));
-        if let Ok(session) = fs::read(&session_path) {
-            if conn.set_session(&session).is_err() {
-                error!("{} session resumption failed", id);
+        // qlog
+        if !self.qlog_root.as_os_str().is_empty() {
+            let qdir = shard2(&self.qlog_root, &id);
+            let _ = fs::create_dir_all(&qdir);
+            let qlog_path = qdir.join(format!("{id}.qlog.ndjson.gz"));
+            if let Ok(qlog) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&qlog_path)
+            {
+                let gz = GzEncoder::new(qlog, Compression::fast());
+                conn.set_qlog(
+                    Box::new(gz),
+                    "client qlog".into(),
+                    format!("host={} id={}", self.host, id),
+                );
+            } else {
+                error!("{} set qlog failed", id);
             }
         }
 
         // keylog
-        let kdir = shard2(&self.keylog_root, &id);
-        let _ = fs::create_dir_all(&kdir);
-        let keylog_path = kdir.join(format!("{id}.keylog"));
-        if let Ok(keylog) = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&keylog_path)
-        {
-            conn.set_keylog(Box::new(keylog));
-        } else {
-            error!("{} set key log failed", id);
+        if !self.keylog_root.as_os_str().is_empty() {
+            let kdir = shard2(&self.keylog_root, &id);
+            let _ = fs::create_dir_all(&kdir);
+            let keylog_path = kdir.join(format!("{id}.keylog"));
+            if let Ok(keylog) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&keylog_path)
+            {
+                conn.set_keylog(Box::new(keylog));
+            } else {
+                error!("{} set key log failed", id);
+            }
         }
 
-        // qlog
-        let qdir = shard2(&self.qlog_root, &id);
-        let _ = fs::create_dir_all(&qdir);
-        let qlog_path = qdir.join(format!("{id}.qlog.ndjson.gz"));
-        if let Ok(qlog) = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&qlog_path)
-        {
-            let gz = GzEncoder::new(qlog, Compression::fast());
-            conn.set_qlog(
-                Box::new(gz),
-                "client qlog".into(),
-                format!("host={} id={}", self.host, id),
-            );
-        } else {
-            error!("{} set qlog failed", id);
+        // session resume
+        if !self.session_root.as_os_str().is_empty() {
+            // Stable key needed --> host
+            let key = &self.host; // minimal stable key
+            let sdir = shard2(&self.session_root, key);
+            let _ = fs::create_dir_all(&sdir);
+            let session_path = sdir.join(format!("{key}.session"));
+            if let Ok(session) = fs::read(&session_path) {
+                if let Err(e) = conn.set_session(&session) {
+                    error!("{} session resumption failed: {:?}", conn.trace_id(), e);
+                }
+            }
         }
     }
 
     fn on_conn_established(&mut self, conn: &mut Connection) {
         debug!("{} connection is established", conn.trace_id());
+
+        // If connection crashes, we still have a session file
+        if !self.session_root.as_os_str().is_empty() {
+            if let Some(session) = conn.session() {
+                let key = &self.host;
+                let sdir = shard2(&self.session_root, key);
+                let _ = fs::create_dir_all(&sdir);
+                let session_path = sdir.join(format!("{key}.session"));
+                let _ = fs::write(&session_path, session);
+            }
+        }
+
         self.app.on_connected(conn);
     }
 
     fn on_conn_closed(&mut self, conn: &mut Connection) {
-        debug!("{} connection is closed", conn.trace_id());
+        let id = conn.trace_id().to_string();
+        debug!("{} connection is closed", id);
         let mut context = self.context.try_borrow_mut().unwrap();
         context.set_finish(true);
 
         // Persist session
-        let session_path = self
-            .session_root
-            .join(format!("{}.session", conn.trace_id()));
-        if let Some(session) = conn.session() {
-            let _ = fs::write(&session_path, session);
+        if !self.session_root.as_os_str().is_empty() {
+            if let Some(session) = conn.session() {
+                let key = &self.host;
+                let sdir = shard2(&self.session_root, key);
+                let _ = fs::create_dir_all(&sdir);
+                let session_path = sdir.join(format!("{key}.session"));
+                if let Err(e) = fs::write(&session_path, session) {
+                    error!("write session failed: {:?}", e);
+                }
+            }
+        }
+
+        // Recorder file
+        let s = conn.stats();
+        let meta = MetaRecord {
+            host: self.host.clone(),
+            peer_addr: self.peer_addr.clone(),
+            alpn: {
+                let v: &[u8] = conn.application_proto();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(String::from_utf8_lossy(v).into_owned())
+                }
+            },
+            handshake_ok: conn.is_established(),
+            local_close: conn.local_error().map(|e| format!("{e:?}")),
+            peer_close: conn.peer_error().map(|e| format!("{e:?}")),
+            enable_multipath: conn.is_multipath(),
+            stats: Some(BasicStats {
+                bytes_sent: s.sent_bytes,
+                bytes_recv: s.recv_bytes,
+                bytes_lost: s.lost_bytes,
+                packets_sent: s.sent_count,
+                packets_recv: s.recv_count,
+                packets_lost: s.lost_count,
+            }),
+        };
+
+        if let Err(e) = self.recorder.write_for_key(&id, &meta) {
+            log::error!("write result for {} failed: {}", id, e);
         }
 
         self.app.on_conn_closed(conn);
@@ -309,13 +397,23 @@ pub fn open_connection(
     host: &str,
     socket_addr: &SocketAddr,
     io_config: &IOConfig,
+    general_config: &GeneralConfig,
     connection_config: &ConnectionConfig,
+    recorder: &Recorder,
     app: Box<dyn AppProtocol>,
 ) -> Result<()> {
-    // Create client.
-    let mut client = Client::new(host, connection_config, io_config, socket_addr, app)?;
+    // Create client
+    let mut client = Client::new(
+        host,
+        socket_addr,
+        io_config,
+        general_config,
+        connection_config,
+        recorder,
+        app,
+    )?;
 
-    // Connect to server.
+    // Connect to server
     client.endpoint.connect(
         client.sock.local_addr(),
         socket_addr.clone(),
@@ -325,7 +423,7 @@ pub fn open_connection(
         None,
     )?;
 
-    // Run event loop.
+    // Run event loop
     let mut events = mio::Events::with_capacity(1024);
     loop {
         // Process connections.
@@ -343,7 +441,7 @@ pub fn open_connection(
             }
         }
 
-        // Process timeout events.
+        // Process timeout events
         // Note: Since `poll()` doesn't clearly tell if there was a timeout when it returns,
         // it is up to the endpoint to check for a timeout and deal with it.
         client.endpoint.on_timeout(Instant::now());

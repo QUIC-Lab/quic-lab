@@ -1,11 +1,10 @@
 use crate::h3::quic::AppProtocol;
 use anyhow::Result;
-use core::config::{ConnectionConfig, DelayConfig, IOConfig};
+use core::config::{ConnectionConfig, GeneralConfig, IOConfig, SchedulerConfig};
 use core::recorder::Recorder;
 use core::resolver::resolve_targets;
 use core::throttle::RateLimit;
 use core::transport::quic::quic;
-use core::types::{BasicStats, MetaRecord};
 use std::net::SocketAddr;
 
 use log::{debug, error};
@@ -16,10 +15,8 @@ use tquic::Connection;
 /// HTTP/3 app protocol plugged into the QUIC engine.
 struct H3App {
     host: String,
-    peer_addr: SocketAddr,
     path: String,
     user_agent: String,
-    recorder: Recorder,
 
     h3: Option<Http3Connection>,
     req_stream: Option<u64>,
@@ -30,21 +27,13 @@ struct H3App {
 }
 
 impl H3App {
-    fn new(
-        host: &str,
-        peer_addr: &SocketAddr,
-        path: &str,
-        user_agent: &str,
-        recorder: &Recorder,
-    ) -> Self {
+    fn new(host: &str, peer_addr: &SocketAddr, path: &str, user_agent: &str) -> Self {
         let mut full_path = peer_addr.to_string();
         full_path.push_str(path);
         Self {
             host: host.to_string(),
-            peer_addr: *peer_addr,
             path: full_path,
             user_agent: user_agent.to_string(),
-            recorder: recorder.clone(),
             h3: None,
             req_stream: None,
             status: None,
@@ -163,44 +152,12 @@ impl AppProtocol for H3App {
         }
     }
 
-    fn on_stream_writable(&mut self, _conn: &mut Connection, _stream_id: u64) {
-        // Not used for GET without body.
+    fn on_stream_writable(&mut self, _conn: &mut Connection, _stream_id: u64) { /* Not used for GET without body. */
     }
 
     fn on_stream_closed(&mut self, _conn: &mut Connection, _stream_id: u64) {}
 
     fn on_conn_closed(&mut self, _conn: &mut Connection) {
-        let id = _conn.trace_id().to_string();
-
-        let s = _conn.stats();
-        let meta = MetaRecord {
-            host: self.host.clone(),
-            peer_addr: self.peer_addr,
-            alpn: {
-                let v: &[u8] = _conn.application_proto();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(String::from_utf8_lossy(v).into_owned())
-                }
-            },
-            handshake_ok: _conn.is_established(),
-            local_close: _conn.local_error().map(|e| format!("{e:?}")),
-            peer_close: _conn.peer_error().map(|e| format!("{e:?}")),
-            stats: Some(BasicStats {
-                bytes_sent: s.sent_bytes,
-                bytes_recv: s.recv_bytes,
-                bytes_lost: s.lost_bytes,
-                packets_sent: s.sent_count,
-                packets_recv: s.recv_count,
-                packets_lost: s.lost_count,
-            }),
-        };
-
-        if let Err(e) = self.recorder.write_for_key(&id, &meta) {
-            log::error!("write result for {} failed: {}", id, e);
-        }
-
         debug!("h3 finished, status = {:?}", self.status);
     }
 }
@@ -208,9 +165,10 @@ impl AppProtocol for H3App {
 /// Try a sequence of connection configs; stop at first success. Every config is attempted.
 pub fn probe(
     host: &str,
+    scheduler_config: &SchedulerConfig,
     io_config: &IOConfig,
+    general_config: &GeneralConfig,
     connection_configs: &[ConnectionConfig],
-    delay: &DelayConfig,
     rl: &RateLimit,
     recorder: &Recorder,
 ) -> Result<()> {
@@ -224,16 +182,12 @@ pub fn probe(
             rl.until_ready();
 
             // Build the HTTP/3 app and open a QUIC connection that will drive it.
-            let app = Box::new(H3App::new(
-                host,
-                &addr,
-                &att.path,
-                &att.user_agent,
-                recorder,
-            ));
+            let app = Box::new(H3App::new(host, &addr, &att.path, &att.user_agent));
 
             // NOTE: business logic of core’s event loop remains unchanged.
-            if let Err(e) = quic::open_connection(host, &addr, io_config, att, app) {
+            if let Err(e) =
+                quic::open_connection(host, &addr, io_config, general_config, att, recorder, app)
+            {
                 error!("[{}] connect {} err: {e:?}", host, addr);
                 continue;
             }
@@ -246,9 +200,10 @@ pub fn probe(
 
         if attempt_succeeded {
             break;
-        } else if idx + 1 < connection_configs.len() && delay.inter_attempt_delay_ms > 0 {
+        } else if idx + 1 < connection_configs.len() && scheduler_config.inter_attempt_delay_ms > 0
+        {
             std::thread::sleep(std::time::Duration::from_millis(
-                delay.inter_attempt_delay_ms,
+                scheduler_config.inter_attempt_delay_ms,
             ));
         }
     }

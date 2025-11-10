@@ -77,6 +77,7 @@ pub struct MetaRecord {
     pub handshake_ok: bool,
     pub local_close: Option<String>,
     pub peer_close: Option<String>,
+    pub enable_multipath: bool,
     pub stats: Option<BasicStats>,
 }
 #[derive(serde::Serialize)]

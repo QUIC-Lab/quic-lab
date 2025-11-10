@@ -3,18 +3,20 @@
 concurrency = 0
 requests_per_second = 200
 burst = 200
-
-[delay]
 # Wait this long between attempts to the same domain (ms)
-inter_attempt_delay_ms = 200
-
-[general]
-log_level = "info"  # OFF/ERROR/WARN/INFO/DEBUG/TRACE
+inter_attempt_delay_ms = 3000
 
 [io]
 in_dir = "in"
 domains_file_name = "domains.txt"
 out_dir = "out"
+
+[general]
+log_level = "INFO"  # OFF/ERROR/WARN/INFO/DEBUG/TRACE
+save_recorder_files = true
+save_qlog_files = true
+save_keylog_files = false
+save_session_files = false
 
 
 # connection_configs are tried in order until first success. You can add many.

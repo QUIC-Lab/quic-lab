@@ -11,19 +11,15 @@ use std::{
 pub struct RootConfig {
     /// Scheduler knobs (threads, RPS, burst)
     #[serde(default)]
-    pub general: GeneralConfig,
-
-    /// Scheduler knobs (threads, RPS, burst)
-    #[serde(default)]
     pub scheduler: SchedulerConfig,
-
-    /// Ethical pacing between attempts to the same domain
-    #[serde(default)]
-    pub delay: DelayConfig,
 
     /// Recorder / output knobs
     #[serde(default)]
     pub io: IOConfig,
+
+    /// Logs and file output, general settings
+    #[serde(default)]
+    pub general: GeneralConfig,
 
     /// Probe attempt configurations (tried in order until one succeeds).
     #[serde(default)]
@@ -31,49 +27,36 @@ pub struct RootConfig {
 }
 
 // ---------------- Scheduler ----------------
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct SchedulerConfig {
     /// Number of worker threads (0 = auto = CPU count)
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+
     /// Global maximum "requests per second" (0 = unlimited)
     #[serde(default = "default_requests_per_second")]
     pub requests_per_second: u32,
+
     /// Short-term burst allowance for the limiter (tokens)
     #[serde(default = "default_burst")]
     pub burst: u32,
-}
 
+    /// Delay between attempts to the same domain (milliseconds)
+    #[serde(default = "default_inter_attempt_delay_ms")]
+    pub inter_attempt_delay_ms: u64,
+}
 impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             concurrency: default_concurrency(),
             requests_per_second: default_requests_per_second(),
             burst: default_burst(),
-        }
-    }
-}
-
-// ---------------- Delay ----------------
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct DelayConfig {
-    /// Delay between attempts to the same domain (milliseconds)
-    #[serde(default = "default_inter_attempt_delay_ms")]
-    pub inter_attempt_delay_ms: u64,
-}
-
-impl Default for DelayConfig {
-    fn default() -> Self {
-        Self {
             inter_attempt_delay_ms: default_inter_attempt_delay_ms(),
         }
     }
 }
 
 // ---------------- IO ----------------
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct IOConfig {
     /// Input directory; created if missing
@@ -88,7 +71,6 @@ pub struct IOConfig {
     #[serde(default = "default_out_dir")]
     pub out_dir: String,
 }
-
 impl Default for IOConfig {
     fn default() -> Self {
         Self {
@@ -100,24 +82,42 @@ impl Default for IOConfig {
 }
 
 // ---------------- General ----------------
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct GeneralConfig {
     /// Log level, support OFF/ERROR/WARN/INFO/DEBUG/TRACE.
     #[serde(default = "default_log_level")]
     pub log_level: log::LevelFilter,
+
+    /// Enable and save recorder files
+    #[serde(default = "default_save_recorder_files")]
+    pub save_recorder_files: bool,
+
+    /// Enable and save qlog files
+    #[serde(default = "default_save_qlog_files")]
+    pub save_qlog_files: bool,
+
+    /// Enable and save keylog files
+    #[serde(default = "default_save_keylog_files")]
+    pub save_keylog_files: bool,
+
+    /// Enable and save session files
+    #[serde(default = "default_save_session_files")]
+    pub save_session_files: bool,
 }
 
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             log_level: default_log_level(),
+            save_recorder_files: default_save_recorder_files(),
+            save_qlog_files: default_save_qlog_files(),
+            save_keylog_files: default_save_keylog_files(),
+            save_session_files: default_save_session_files(),
         }
     }
 }
 
 // ---------------- Attempt (QUIC/H3) ----------------
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     // Application-layer knobs
@@ -173,7 +173,6 @@ pub struct ConnectionConfig {
     #[serde(default = "default_multipath_algorithm")]
     pub multipath_algorithm: String,
 }
-
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
@@ -200,7 +199,7 @@ impl Default for ConnectionConfig {
     }
 }
 
-// ---- General defaults ----
+// ---- Scheduler defaults ----
 fn default_concurrency() -> usize {
     0
 } // 0 = auto
@@ -211,11 +210,38 @@ fn default_burst() -> u32 {
     200
 }
 fn default_inter_attempt_delay_ms() -> u64 {
-    200
+    3000
+}
+
+// ---- IO defaults ----
+fn default_in_dir() -> String {
+    "in".into()
+}
+fn default_domains_file_name() -> String {
+    "domains.txt".into()
+}
+fn default_out_dir() -> String {
+    "out".into()
+}
+
+// ---- General defaults ----
+fn default_log_level() -> log::LevelFilter {
+    log::LevelFilter::Info
+}
+fn default_save_recorder_files() -> bool {
+    true
+}
+fn default_save_qlog_files() -> bool {
+    true
+}
+fn default_save_keylog_files() -> bool {
+    false
+}
+fn default_save_session_files() -> bool {
+    false
 }
 
 // ---- Attempt defaults ----
-
 fn default_port() -> u16 {
     443
 }
@@ -271,22 +297,7 @@ fn default_multipath_algorithm() -> String {
     "minrtt".into()
 }
 
-// ---- IO defaults ----
-fn default_in_dir() -> String {
-    "in".into()
-}
-fn default_domains_file_name() -> String {
-    "domains.txt".into()
-}
-fn default_out_dir() -> String {
-    "out".into()
-}
-fn default_log_level() -> log::LevelFilter {
-    log::LevelFilter::Info
-}
-
 // ---- public API ----
-
 pub fn read_config<P: AsRef<Path>>(p: P) -> Result<RootConfig> {
     let s = fs::read_to_string(&p)
         .with_context(|| format!("reading config file {}", p.as_ref().display()))?;

@@ -10,22 +10,28 @@ use crate::shard2;
 pub struct Recorder {
     root: PathBuf,
     ext: &'static str,
+    disabled: bool,
 }
 
 impl Recorder {
-    pub fn new<P: AsRef<Path>>(root: P) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(root: P, save_recorder_files: bool) -> Result<Self> {
         let root = root.as_ref().join("recorder_files");
-        create_dir_all(&root)?;
-        Ok(Self { root, ext: "json" })
-    }
-
-    /// Compute the final path for a given key (e.g. trace_id).
-    pub fn path_for_key(&self, key: &str) -> PathBuf {
-        shard2(&self.root, key).join(format!("{key}.{}", self.ext))
+        if save_recorder_files {
+            create_dir_all(&root)?
+        };
+        Ok(Self {
+            root,
+            ext: "json",
+            disabled: !save_recorder_files,
+        })
     }
 
     /// Atomically write one JSON file per key, matching qlog’s sharded layout.
     pub fn write_for_key<T: Serialize>(&self, key: &str, value: &T) -> Result<PathBuf> {
+        if self.disabled {
+            return Ok(PathBuf::new());
+        }
+
         let dir = shard2(&self.root, key);
         create_dir_all(&dir)?;
 
