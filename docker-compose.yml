@@ -1,13 +1,10 @@
 services:
   quic-lab:
     container_name: quic-lab
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: ghcr.io/quic-lab/quic-lab
     ports:
-      - "80:80"       # Adjust depending on available ports on the host
-      - "[::]:80:80"  # Adjust depending on available ports on the host
+      - "80:80"
+      - "[::]:80:80"
     dns:
       - "1.1.1.1"
       - "2606:4700:4700::1111"
