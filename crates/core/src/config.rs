@@ -88,6 +88,10 @@ pub struct GeneralConfig {
     #[serde(default = "default_log_level")]
     pub log_level: log::LevelFilter,
 
+    /// Enable and save log files
+    #[serde(default = "default_save_log_files")]
+    pub save_log_files: bool,
+
     /// Enable and save recorder files
     #[serde(default = "default_save_recorder_files")]
     pub save_recorder_files: bool,
@@ -109,6 +113,7 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             log_level: default_log_level(),
+            save_log_files: default_save_log_files(),
             save_recorder_files: default_save_recorder_files(),
             save_qlog_files: default_save_qlog_files(),
             save_keylog_files: default_save_keylog_files(),
@@ -227,6 +232,9 @@ fn default_out_dir() -> String {
 // ---- General defaults ----
 fn default_log_level() -> log::LevelFilter {
     log::LevelFilter::Info
+}
+fn default_save_log_files() -> bool {
+    true
 }
 fn default_save_recorder_files() -> bool {
     true

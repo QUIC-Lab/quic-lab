@@ -2,8 +2,9 @@ use anyhow::{anyhow, Result};
 use core::config::{read_config, read_domains_iter};
 use core::recorder::Recorder;
 use core::throttle::RateLimit;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use rayon::prelude::*;
+use std::io::{stderr, stdout, IsTerminal};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -11,8 +12,7 @@ use std::time::{Duration, Instant};
 
 // TTY-recognition
 fn is_tty() -> bool {
-    // stdout is enough; stderr works as well
-    atty::is(atty::Stream::Stdout)
+    stdout().is_terminal() || stderr().is_terminal()
 }
 
 fn fmt_hms(mut secs: u64) -> String {
@@ -35,9 +35,7 @@ fn main() -> Result<()> {
     let cfg = read_config(&cfg_path)?;
 
     // Logging
-    env_logger::builder()
-        .filter_level(cfg.general.log_level)
-        .init();
+    let _run_log = core::logging::init_file_logger(&cfg.io.out_dir, cfg.general.log_level)?;
 
     // Load domains
     let domains_path = PathBuf::from(&cfg.io.in_dir).join(&cfg.io.domains_file_name);
@@ -82,7 +80,6 @@ fn main() -> Result<()> {
         Some(std::thread::spawn(move || {
             // Every 10 seconds
             while !done_c.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_secs(10));
                 let p = processed_c.load(Ordering::Relaxed);
                 let e = err_c.load(Ordering::Relaxed);
                 let elapsed = start.elapsed().as_secs_f64();
@@ -106,6 +103,7 @@ fn main() -> Result<()> {
                     rate,
                     e
                 );
+                std::thread::sleep(Duration::from_secs(10));
             }
             // Finish message
             let p = processed_c.load(Ordering::Relaxed);
@@ -125,10 +123,12 @@ fn main() -> Result<()> {
     // TTY-Progressbar setup
     let pb = if use_tty {
         let pb = ProgressBar::new(total);
+        pb.set_draw_target(ProgressDrawTarget::stderr());
         pb.set_style(ProgressStyle::with_template(
             "{spinner:.green} {pos}/{len} [{bar:40.cyan/blue}] \
                  {percent}% | {elapsed_precise} < {eta_precise} | {per_sec} it/s | {msg}",
         )?);
+        pb.enable_steady_tick(Duration::from_millis(80));
         Some(Arc::new(pb))
     } else {
         None
@@ -145,13 +145,10 @@ fn main() -> Result<()> {
             &recorder,
         ) {
             err_cnt.fetch_add(1, Ordering::Relaxed);
+            log::error!("[{}] ERROR: {e:#}", host);
             if let Some(pb) = &pb {
-                // avoid mangling the bar when printing errors
-                pb.suspend(|| eprintln!("[{}] ERROR: {e:#}", host));
                 let errs = err_cnt.load(Ordering::Relaxed);
                 pb.set_message(format!("errors: {errs}"));
-            } else {
-                eprintln!("[{}] ERROR: {e:#}", host);
             }
         }
         processed.fetch_add(1, Ordering::Relaxed);

@@ -7,6 +7,7 @@ pub mod resolver;
 pub mod throttle;
 pub mod transport;
 pub mod types;
+
 fn shard2(base: &std::path::Path, host: &str) -> std::path::PathBuf {
     let mut h = DefaultHasher::new();
     host.hash(&mut h);

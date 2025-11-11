@@ -196,6 +196,7 @@ name = "core"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "env_logger",
  "flate2",
  "governor",
@@ -1048,8 +1049,8 @@ dependencies = [
  "anyhow",
  "atty",
  "core",
- "env_logger",
  "indicatif",
+ "log",
  "probes",
  "rayon",
 ]

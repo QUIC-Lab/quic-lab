@@ -11,8 +11,9 @@ toml = "0"
 governor = "0"
 tquic = { version = "1", features = ["qlog", "h3"] }
 serde_json = "1"
-log = { version = "0.4", features = ["serde"] }
+log = { version = "0", features = ["serde"] }
 mio = { version = "1", features = ["net", "os-poll"] }
 rustc-hash = "2"
 slab = "0"
-flate2 = "1.1.5"
+flate2 = "1"
+chrono = { version = "0", default-features = false, features = ["clock"] }
