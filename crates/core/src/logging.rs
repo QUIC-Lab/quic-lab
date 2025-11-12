@@ -1,7 +1,11 @@
 use std::fs::{self, create_dir_all, rename, File, OpenOptions};
 use std::io::{Result as IoResult, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+
+use tracing_appender::non_blocking::{self, WorkerGuard};
+use tracing_log::LogTracer;
+use tracing_subscriber::{fmt, EnvFilter};
 
 /// Hard cap for the active log file before rolling to a new numbered file.
 const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
@@ -19,12 +23,7 @@ struct RotatingWriter {
 }
 
 impl RotatingWriter {
-    fn new<P: AsRef<Path>>(
-        dir: P,
-        base: &str,
-        _ignored_max_bytes: u64, // kept for compat with caller; ignored
-        _ignored_backups: usize, // kept for compat with caller; ignored
-    ) -> anyhow::Result<Self> {
+    fn new<P: AsRef<Path>>(dir: P, base: &str) -> anyhow::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         create_dir_all(&dir)?;
 
@@ -35,9 +34,7 @@ impl RotatingWriter {
                 if let Some(name) = entry.file_name().to_str() {
                     if let Some(s) = name.strip_prefix(&(base.to_string() + ".")) {
                         if let Ok(i) = s.parse::<u64>() {
-                            if i > max_idx {
-                                max_idx = i;
-                            }
+                            max_idx = max_idx.max(i);
                         }
                     }
                 }
@@ -66,13 +63,10 @@ impl RotatingWriter {
     }
 
     fn rotate(&mut self) -> IoResult<()> {
-        // Close current file before rename (Windows requires this).
         if let Some(f) = self.file.take() {
             drop(f);
         }
-
         let cur = self.current_path();
-        // Only attempt rename if current file exists.
         if cur.exists() {
             let numbered = self.dir.join(format!("{}.{}", self.base, self.next_index));
             // If a stale target exists, overwrite it.
@@ -82,8 +76,6 @@ impl RotatingWriter {
             rename(&cur, &numbered)?;
             self.next_index += 1;
         }
-
-        // Open a fresh active file.
         let fresh = OpenOptions::new().create(true).append(true).open(&cur)?;
         self.file = Some(fresh);
         self.size = 0;
@@ -102,7 +94,6 @@ impl Write for RotatingWriter {
         self.size += n as u64;
         Ok(n)
     }
-
     fn flush(&mut self) -> IoResult<()> {
         if let Some(f) = self.file.as_mut() {
             f.flush()
@@ -112,7 +103,6 @@ impl Write for RotatingWriter {
     }
 }
 
-/// Thread-safe wrapper for env_logger sink.
 struct ThreadSafeWriter(Mutex<RotatingWriter>);
 impl ThreadSafeWriter {
     fn new(inner: RotatingWriter) -> Self {
@@ -130,44 +120,59 @@ impl Write for ThreadSafeWriter {
     }
 }
 
-/// Initialize env_logger to write only to <out_dir>/log_files/quic-lab.log with size-based numbering.
-/// No console output.
-pub fn init_file_logger(out_dir: &str, level: log::LevelFilter) -> anyhow::Result<PathBuf> {
-    use env_logger::{Builder, Target};
-    use std::io::Write;
+static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
-    // Build <out_dir>/log_files
+fn map_level(l: log::LevelFilter) -> tracing_subscriber::filter::LevelFilter {
+    use log::LevelFilter as L;
+    use tracing_subscriber::filter::LevelFilter as T;
+    match l {
+        L::Off => T::OFF,
+        L::Error => T::ERROR,
+        L::Warn => T::WARN,
+        L::Info => T::INFO,
+        L::Debug => T::DEBUG,
+        L::Trace => T::TRACE,
+    }
+}
+
+/// Initialise logging to `<out_dir>/log_files/quic-lab.log` with rotation and a non-blocking worker.
+/// Captures `log::*` macros. Returns the active file path.
+pub fn init_file_logger(out_dir: &str, level: log::LevelFilter) -> anyhow::Result<PathBuf> {
     let dir = PathBuf::from(out_dir).join("log_files");
     create_dir_all(&dir)?;
 
-    // The arguments `max_bytes` and `backups` are ignored; we use the constants above.
-    let writer = RotatingWriter::new(&dir, BASE_NAME, MAX_LOG_BYTES, 0)?;
-    let log_path = dir.join(BASE_NAME);
+    let writer = ThreadSafeWriter::new(RotatingWriter::new(&dir, BASE_NAME)?);
 
-    let mut b = Builder::new();
-    b.format(|buf, record| {
-        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
-        writeln!(
-            buf,
-            "[{}] {} {}: {}",
-            ts,
-            record.level(),
-            record.target(),
-            record.args()
-        )
-    });
-    b.filter_level(level);
+    // Non-blocking channel + background worker (default capacity, lossy).
+    let (nb, guard) = non_blocking::NonBlockingBuilder::default().finish(writer);
+    let _ = LOG_GUARD.set(guard); // ignore if already set
 
-    if let Ok(spec) = std::env::var("RUST_LOG") {
-        b.parse_filters(&spec);
-    } else {
-        // keep tquic noisy logs down unless user overrides
-        b.parse_filters("tquic=warn,tquic::h3=warn");
-    }
+    // Forward `log` crate records into `tracing`. Ignore if already set.
+    let _ = LogTracer::init();
 
-    // File-only target, with our numbered-rotation writer
-    b.target(Target::Pipe(Box::new(ThreadSafeWriter::new(writer))));
-    b.init();
+    // Build filter: prefer RUST_LOG, else provided level plus quieting for deps.
+    let env = std::env::var("RUST_LOG").ok();
+    let base = map_level(level);
+    let filter = match env {
+        Some(spec) => EnvFilter::new(spec),
+        None => EnvFilter::default()
+            .add_directive(base.into())
+            .add_directive("tquic=warn".parse()?)
+            .add_directive("tquic::h3=warn".parse()?),
+    };
 
-    Ok(log_path)
+    let timer = tracing_subscriber::fmt::time::UtcTime::rfc_3339();
+
+    // Do not panic if another global subscriber is already installed.
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_writer(nb)
+        .with_timer(timer)
+        .with_ansi(false)
+        .with_target(true)
+        .with_level(true)
+        .event_format(fmt::format().compact())
+        .try_init();
+
+    Ok(dir.join(BASE_NAME))
 }

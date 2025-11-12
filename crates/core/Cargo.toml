@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
-env_logger = "0"
 toml = "0"
 governor = "0"
 tquic = { version = "1", features = ["qlog", "h3"] }
@@ -16,4 +15,6 @@ mio = { version = "1", features = ["net", "os-poll"] }
 rustc-hash = "2"
 slab = "0"
 flate2 = "1"
-chrono = { version = "0", default-features = false, features = ["clock"] }
+tracing-log = "0"
+tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "time"] }
+tracing-appender = "0"
