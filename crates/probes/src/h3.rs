@@ -1,12 +1,10 @@
-use crate::h3::quic::AppProtocol;
 use anyhow::Result;
 use core::config::{ConnectionConfig, GeneralConfig, IOConfig, SchedulerConfig};
 use core::recorder::Recorder;
 use core::resolver::resolve_targets;
 use core::throttle::RateLimit;
-use core::transport::quic::quic;
-use std::net::SocketAddr;
 
+use core::transport::quic::{run_probe, AppProtocol};
 use log::{debug, error};
 use tquic::h3::connection::Http3Connection;
 use tquic::h3::{Header, Http3Config, Http3Event, NameValue};
@@ -27,12 +25,10 @@ struct H3App {
 }
 
 impl H3App {
-    fn new(host: &str, peer_addr: &SocketAddr, path: &str, user_agent: &str) -> Self {
-        let mut full_path = peer_addr.to_string();
-        full_path.push_str(path);
+    fn new(host: &str, path: &str, user_agent: &str) -> Self {
         Self {
             host: host.to_string(),
-            path: full_path,
+            path: path.to_string(),
             user_agent: user_agent.to_string(),
             h3: None,
             req_stream: None,
@@ -182,19 +178,15 @@ pub fn probe(
             rl.until_ready();
 
             // Build the HTTP/3 app and open a QUIC connection that will drive it.
-            let app = Box::new(H3App::new(host, &addr, &att.path, &att.user_agent));
+            let app = H3App::new(host, &att.path, &att.user_agent);
 
-            // NOTE: business logic of core’s event loop remains unchanged.
-            if let Err(e) =
-                quic::open_connection(host, &addr, io_config, general_config, att, recorder, app)
-            {
+            if let Err(e) = run_probe(host, &addr, io_config, general_config, att, recorder, app) {
                 error!("[{}] connect {} err: {e:?}", host, addr);
                 continue;
             }
 
             // If we reached here cleanly, count as success for this address.
             attempt_succeeded = true;
-            // For probing you may choose to continue to the other family, but we stop on first success.
             break;
         }
 

@@ -2,8 +2,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 pub mod config;
 pub mod logging;
+pub mod qlog;
 pub mod recorder;
 pub mod resolver;
+pub mod rotate;
 pub mod throttle;
 pub mod transport;
 pub mod types;

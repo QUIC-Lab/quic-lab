@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use std::cell::RefCell;
 use std::fs;
 use std::net::SocketAddr;
@@ -24,6 +22,7 @@ use std::time::Instant;
 use log::debug;
 use log::error;
 use mio::event::Event;
+use serde_json::json;
 use tquic::Config;
 use tquic::Connection;
 use tquic::Endpoint;
@@ -33,13 +32,13 @@ use tquic::TransportHandler;
 
 use crate::config::{ConnectionConfig, GeneralConfig, IOConfig};
 use crate::recorder::Recorder;
-use crate::shard2;
 use crate::transport::quic::QuicSocket;
 use crate::transport::quic::Result;
 use crate::types::{BasicStats, MetaRecord};
+use crate::{qlog, shard2};
 
 /// Application protocol hook that runs on top of QUIC.
-/// Implementations may drive HTTP/3, HTTP/0.9, or anything else.
+/// Implementations may drive HTTP/3 or anything else.
 pub trait AppProtocol {
     fn on_connected(&mut self, _conn: &mut Connection) {}
     fn on_stream_readable(&mut self, _conn: &mut Connection, _stream_id: u64) {}
@@ -253,22 +252,14 @@ impl TransportHandler for ClientHandler {
 
         // qlog
         if !self.qlog_root.as_os_str().is_empty() {
-            let qdir = shard2(&self.qlog_root, &id);
-            let _ = fs::create_dir_all(&qdir);
-            let qlog_path = qdir.join(format!("{id}.qlog.ndjson.gz"));
-            if let Ok(qlog) = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&qlog_path)
-            {
-                let gz = GzEncoder::new(qlog, Compression::fast());
+            if let Some(w) = qlog::PerConnSqlog::new(&id) {
                 conn.set_qlog(
-                    Box::new(gz),
+                    Box::new(w),
                     "client qlog".into(),
                     format!("host={} id={}", self.host, id),
                 );
             } else {
-                error!("{} set qlog failed", id);
+                error!("{} set qlog failed (sink not initialised)", id);
             }
         }
 
@@ -292,7 +283,7 @@ impl TransportHandler for ClientHandler {
         if !self.session_root.as_os_str().is_empty() {
             // Stable key needed --> host
             let key = &self.host; // minimal stable key
-            let sdir = shard2(&self.session_root, key);
+            let sdir = shard2(&self.session_root, &key);
             let _ = fs::create_dir_all(&sdir);
             let session_path = sdir.join(format!("{key}.session"));
             if let Ok(session) = fs::read(&session_path) {
@@ -301,20 +292,53 @@ impl TransportHandler for ClientHandler {
                 }
             }
         }
+
+        // qlog: mark connection created
+        if let Some(q) = qlog::qlog() {
+            let msg = format!("conn_created host={} peer={}", self.host, self.peer_addr);
+            q.info(&id, &msg);
+        }
     }
 
     fn on_conn_established(&mut self, conn: &mut Connection) {
-        debug!("{} connection is established", conn.trace_id());
+        let id = conn.trace_id().to_string();
+        debug!("{} connection is established", id);
 
         // If connection crashes, we still have a session file
         if !self.session_root.as_os_str().is_empty() {
             if let Some(session) = conn.session() {
                 let key = &self.host;
-                let sdir = shard2(&self.session_root, key);
+                let sdir = shard2(&self.session_root, &key);
                 let _ = fs::create_dir_all(&sdir);
                 let session_path = sdir.join(format!("{key}.session"));
                 let _ = fs::write(&session_path, session);
             }
+        }
+
+        if let Some(q) = qlog::qlog() {
+            let host = self.host.clone();
+            let peer = self.peer_addr.to_string();
+            let alpn = {
+                let v: &[u8] = conn.application_proto();
+                if v.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    String::from_utf8_lossy(v).into_owned()
+                }
+            };
+
+            // structured meta event for nicer qvis labels
+            let _ = q.append_event(
+                &id,
+                "meta:connection",
+                &json!({ "host": host, "peer": peer, "alpn": alpn }),
+            );
+
+            let msg = format!(
+                "conn_established host={} peer={} alpn={}",
+                self.host, self.peer_addr, alpn
+            );
+            q.info(&id, &msg);
         }
 
         self.app.on_connected(conn);
@@ -370,6 +394,19 @@ impl TransportHandler for ClientHandler {
             log::error!("write result for {} failed: {}", id, e);
         }
 
+        if let Some(q) = qlog::qlog() {
+            let msg = format!(
+                "conn_closed handsh_ok={} local={:?} peer={:?} sent={} recv={} lost={}",
+                conn.is_established(),
+                conn.local_error(),
+                conn.peer_error(),
+                s.sent_bytes,
+                s.recv_bytes,
+                s.lost_bytes
+            );
+            q.info(&id, &msg);
+        }
+
         self.app.on_conn_closed(conn);
     }
 
@@ -393,7 +430,7 @@ impl TransportHandler for ClientHandler {
     fn on_new_token(&mut self, _conn: &mut Connection, _token: Vec<u8>) {}
 }
 
-pub fn open_connection(
+fn open_connection(
     host: &str,
     socket_addr: &SocketAddr,
     io_config: &IOConfig,
@@ -447,4 +484,19 @@ pub fn open_connection(
         client.endpoint.on_timeout(Instant::now());
     }
     Ok(())
+}
+
+pub fn run_probe<A>(
+    host: &str,
+    addr: &SocketAddr,
+    io: &IOConfig,
+    general: &GeneralConfig,
+    cfg: &ConnectionConfig,
+    recorder: &Recorder,
+    app: A,
+) -> Result<()>
+where
+    A: AppProtocol + 'static,
+{
+    open_connection(host, addr, io, general, cfg, recorder, Box::new(app))
 }

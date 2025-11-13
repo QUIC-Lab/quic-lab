@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use quic::open_connection;
-pub mod quic;
-
 use std::io::ErrorKind;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -29,21 +26,13 @@ use mio::Token;
 use rustc_hash::FxHashMap;
 use slab::Slab;
 
+use tquic::PacketInfo;
 use tquic::PacketSendHandler;
-use tquic::{Connection, PacketInfo};
+
+pub use quic::{run_probe, AppProtocol};
+pub mod quic;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
-
-pub trait QuicApp: Send {
-    /// Called once the QUIC connection is established. Open streams, kick off protocol, etc.
-    fn on_established(&mut self, conn: &mut Connection);
-
-    /// Called when a stream is readable. Use `scratch` as a reusable buffer for `stream_read`.
-    fn on_stream_readable(&mut self, conn: &mut Connection, stream_id: u64, scratch: &mut Vec<u8>);
-
-    /// Optional: observe connection close.
-    fn on_conn_closed(&mut self, _conn: &mut Connection) {}
-}
 
 /// UDP socket wrapper for QUIC
 pub struct QuicSocket {

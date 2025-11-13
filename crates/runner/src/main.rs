@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use core::config::{read_config, read_domains_iter};
+use core::qlog;
 use core::recorder::Recorder;
 use core::throttle::RateLimit;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -37,6 +38,9 @@ fn main() -> Result<()> {
     // Logging
     let _run_log = core::logging::init_file_logger(&cfg.io.out_dir, cfg.general.log_level)?;
 
+    // QLOG sink (flat folder + rotation)
+    qlog::init(&cfg.io.out_dir, cfg.general.save_qlog_files)?;
+
     // Load domains
     let domains_path = PathBuf::from(&cfg.io.in_dir).join(&cfg.io.domains_file_name);
     let domains: Vec<String> = read_domains_iter(&domains_path)?.collect();
@@ -44,7 +48,7 @@ fn main() -> Result<()> {
         return Err(anyhow!("no domains found in {}", domains_path.display()));
     }
 
-    // Recorder (one file per trace_id), colocated with qlog
+    // Recorder (one file per trace_id)
     let recorder = Recorder::new(&cfg.io.out_dir, cfg.general.save_recorder_files)?;
 
     // Thread pool sizing
