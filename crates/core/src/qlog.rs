@@ -18,7 +18,7 @@ const FLUSH_EVERY: u32 = 2000; // flush every N records
 
 /// When true, keep only fields/events that qvis + some custom stats.
 /// When false, write the full events as received.
-pub const QVIS_MINIMAL: bool = true;
+pub const MINIMIZE_QLOG: bool = true;
 
 #[derive(Clone)]
 struct QlogHeaderHook {
@@ -209,7 +209,7 @@ fn vobj(v: &mut Value) -> Option<&mut Map<String, Value>> {
 /// Reduce event payload to what qvis + custom stats.
 /// Returns `false` to drop the event entirely.
 fn qvis_minimize_in_place(ev: &mut Value) -> bool {
-    if !QVIS_MINIMAL {
+    if !MINIMIZE_QLOG {
         return true;
     }
 

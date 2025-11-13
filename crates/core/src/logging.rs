@@ -7,7 +7,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::rotate::{NewFileHook, RotatingWriter};
 
-const MAX_LOG_BYTES: u64 = 128 * 1024 * 1024; // 64 MiB
+const MAX_LOG_BYTES: u64 = 128 * 1024 * 1024;
 const BASE_NAME: &str = "quic-lab.log";
 
 struct NoHook;
