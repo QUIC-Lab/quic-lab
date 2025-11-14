@@ -91,6 +91,11 @@ fn main() -> Result<()> {
             while !done_c.load(Ordering::Relaxed) {
                 let p = processed_c.load(Ordering::Relaxed);
                 let e = err_c.load(Ordering::Relaxed);
+                let pct = if total > 0 {
+                    (p as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
                 let elapsed = start.elapsed().as_secs_f64();
                 let rate = if elapsed > 0.0 {
                     p as f64 / elapsed
@@ -104,9 +109,10 @@ fn main() -> Result<()> {
                     0
                 };
                 eprintln!(
-                    "[progress] {}/{} done | {} elapsed | ETA {} | {:.1} it/s | errors: {}",
+                    "[progress] {}/{} ({:.1}%) done | {} elapsed | ETA {} | {:.1} it/s | errors: {}",
                     p,
                     total,
+                    pct,
                     fmt_hms(start.elapsed().as_secs()),
                     fmt_hms(eta),
                     rate,
@@ -117,10 +123,16 @@ fn main() -> Result<()> {
             // Finish message
             let p = processed_c.load(Ordering::Relaxed);
             let e = err_c.load(Ordering::Relaxed);
+            let pct = if total > 0 {
+                (p as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
             eprintln!(
-                "[progress] done {}/{} in {} | errors: {}",
+                "[progress] done {}/{} ({:.1}%) in {} | errors: {}",
                 p,
                 total,
+                pct,
                 fmt_hms(start.elapsed().as_secs()),
                 e
             );
