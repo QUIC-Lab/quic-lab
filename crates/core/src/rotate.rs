@@ -102,13 +102,23 @@ impl<H: NewFileHook> RotatingWriter<H> {
 
 impl<H: NewFileHook> Write for RotatingWriter<H> {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        // Ensure the whole chunk goes into a single file.
         if self.size + buf.len() as u64 > self.max_bytes {
             self.rotate()?;
         }
-        let n = self.file.write(buf)?;
-        self.size += n as u64;
-        Ok(n)
+
+        // Always write the full buffer; avoid partial writes that would
+        // split a logical record across rotation boundaries.
+        self.file.write_all(buf)?;
+        self.size += buf.len() as u64;
+
+        Ok(buf.len())
     }
+
     fn flush(&mut self) -> IoResult<()> {
         self.file.flush()
     }
