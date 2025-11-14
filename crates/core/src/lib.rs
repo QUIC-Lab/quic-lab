@@ -1,6 +1,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 pub mod config;
+pub mod keylog;
 pub mod logging;
 pub mod qlog;
 pub mod recorder;

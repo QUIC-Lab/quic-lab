@@ -17,6 +17,7 @@ save_log_files = true
 save_recorder_files = true
 save_qlog_files = true
 save_keylog_files = false
+# Caution: Creates one .session file for every connection
 save_session_files = false
 
 

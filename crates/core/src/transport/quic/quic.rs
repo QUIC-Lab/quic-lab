@@ -193,8 +193,6 @@ struct ClientHandler {
     host: String,
     peer_addr: SocketAddr,
     session_root: PathBuf,
-    keylog_root: PathBuf,
-    qlog_root: PathBuf,
     recorder: Recorder,
     context: Rc<RefCell<ClientContext>>,
     app: Box<dyn AppProtocol>,
@@ -236,8 +234,6 @@ impl ClientHandler {
             host: host.to_string(),
             peer_addr: peer_addr.clone(),
             session_root,
-            keylog_root,
-            qlog_root,
             recorder: recorder.clone(),
             context,
             app,
@@ -251,32 +247,19 @@ impl TransportHandler for ClientHandler {
         let id = conn.trace_id().to_string();
 
         // qlog
-        if !self.qlog_root.as_os_str().is_empty() {
-            if let Some(w) = qlog::PerConnSqlog::new(&id) {
-                conn.set_qlog(
-                    Box::new(w),
-                    "client qlog".into(),
-                    format!("host={} id={}", self.host, id),
-                );
-            } else {
-                error!("{} set qlog failed (sink not initialised)", id);
-            }
+        if let Some(w) = qlog::PerConnSqlog::new(&id) {
+            conn.set_qlog(
+                Box::new(w),
+                "client qlog".into(),
+                format!("host={} id={}", self.host, id),
+            );
         }
 
         // keylog
-        if !self.keylog_root.as_os_str().is_empty() {
-            let kdir = shard2(&self.keylog_root, &id);
-            let _ = fs::create_dir_all(&kdir);
-            let keylog_path = kdir.join(format!("{id}.keylog"));
-            if let Ok(keylog) = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&keylog_path)
-            {
-                conn.set_keylog(Box::new(keylog));
-            } else {
-                error!("{} set key log failed", id);
-            }
+        if let Some(kl) = crate::keylog::PerConnKeylog::new() {
+            conn.set_keylog(Box::new(kl));
+        } else {
+            error!("{} set key log failed (sink not initialised)", id);
         }
 
         // session resume

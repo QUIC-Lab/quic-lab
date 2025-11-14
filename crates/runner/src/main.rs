@@ -38,6 +38,9 @@ fn main() -> Result<()> {
     // Logging
     let _run_log = core::logging::init_file_logger(&cfg.io.out_dir, cfg.general.log_level)?;
 
+    // Keylog
+    core::keylog::init(&cfg.io.out_dir, cfg.general.save_keylog_files)?;
+
     // QLOG sink (flat folder + rotation)
     qlog::init(&cfg.io.out_dir, cfg.general.save_qlog_files)?;
 
