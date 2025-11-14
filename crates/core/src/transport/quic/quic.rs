@@ -258,8 +258,6 @@ impl TransportHandler for ClientHandler {
         // keylog
         if let Some(kl) = crate::keylog::PerConnKeylog::new() {
             conn.set_keylog(Box::new(kl));
-        } else {
-            error!("{} set key log failed (sink not initialised)", id);
         }
 
         // session resume
