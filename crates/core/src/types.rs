@@ -2,14 +2,13 @@ use crate::config::ConnectionConfig;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
-/// Which IP family to use when probing (config values: "auto", "ipv4", "ipv6", "both").
+/// Which IP family to use when probing (config values: "auto", "ipv4", "ipv6").
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IpVersion {
     Auto,
     Ipv4,
     Ipv6,
-    Both,
 }
 
 impl Default for IpVersion {
@@ -65,7 +64,6 @@ pub fn family_label(f: IpVersion) -> &'static str {
         IpVersion::Auto => "Auto",
         IpVersion::Ipv4 => "IPv4",
         IpVersion::Ipv6 => "IPv6",
-        IpVersion::Both => "Both",
     }
 }
 

@@ -11,7 +11,7 @@ Novel Transport and Application Layer Measurement Techniques* at the University 
 ## Features
 
 - QUIC transport setup and HTTP/3 handshake probing (via [TQUIC](https://github.com/Tencent/tquic))
-- IPv4/IPv6 family handling (`auto`, `v4`, `v6`, `both`)
+- IPv4/IPv6 family handling (`auto`, `v4`, `v6`)
 - Per-domain configuration overrides (timeouts, ALPN, QUIC parameters)
 - Extendable probe system (e.g., connection migration, 0-RTT, Multipath QUIC)
 - Structured results (human-readable logs and machine-parsable output planned)

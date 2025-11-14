@@ -10,12 +10,11 @@ pub fn resolve_peer(host: &str, port: u16, family: IpVersion) -> Result<SocketAd
         IpVersion::Auto => addrs.into_iter().next(),
         IpVersion::Ipv4 => addrs.into_iter().find(|a| a.is_ipv4()),
         IpVersion::Ipv6 => addrs.into_iter().find(|a| a.is_ipv6()),
-        IpVersion::Both => unreachable!("use resolve_peers_for_both() for Both"),
     };
     pick.ok_or_else(|| anyhow!("no matching address for {host}:{port} ({:?})", family))
 }
 
-/// Resolve one IPv4 and/or one IPv6 when Both is requested
+/// Resolve one IPv4 and/or one IPv6 when Auto is requested
 pub fn resolve_peers_for_both(
     host: &str,
     port: u16,
@@ -48,7 +47,8 @@ pub fn resolve_targets(
     family: IpVersion,
 ) -> Result<Vec<(IpVersion, SocketAddr)>> {
     match family {
-        IpVersion::Both => {
+        IpVersion::Auto => {
+            // “smart” mode: try both families with fallback
             let (v4, v6) = resolve_peers_for_both(host, port)?;
             let mut out = Vec::with_capacity(2);
             if let Some(a) = v4 {
@@ -59,7 +59,7 @@ pub fn resolve_targets(
             }
             Ok(out)
         }
-        IpVersion::Auto | IpVersion::Ipv4 | IpVersion::Ipv6 => {
+        IpVersion::Ipv4 | IpVersion::Ipv6 => {
             let a = resolve_peer(host, port, family)?;
             let fam = if a.is_ipv4() {
                 IpVersion::Ipv4

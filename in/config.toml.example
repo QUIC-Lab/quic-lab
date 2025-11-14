@@ -30,7 +30,7 @@ path = "/"
 user_agent = "QUIC-Lab (research; no-harm-intended; opt-out: [INSERT CONTACT INFO])"
 verify_peer = false
 alpn = ["h3"]
-ip_version = "auto"  # "auto" | "v4" | "v6" | "both"
+ip_version = "auto"  # "auto" | "v4" | "v6"
 
 max_idle_timeout_ms = 30000
 initial_max_data = 10485760
@@ -55,7 +55,7 @@ path = "/"
 user_agent = "QUIC-Lab (research; no-harm-intended; opt-out: [INSERT CONTACT INFO])"
 verify_peer = true
 alpn = ["h3"]
-ip_version = "auto"  # "auto" | "v4" | "v6" | "both"
+ip_version = "auto"  # "auto" | "v4" | "v6"
 
 max_idle_timeout_ms = 30000
 initial_max_data = 25165824
@@ -80,7 +80,7 @@ path = "/"
 user_agent = "QUIC-Lab (research; no-harm-intended; opt-out: [INSERT CONTACT INFO])"
 verify_peer = false
 alpn = ["h3"]
-ip_version = "auto"  # "auto" | "v4" | "v6" | "both"
+ip_version = "auto"  # "auto" | "v4" | "v6"
 
 max_idle_timeout_ms = 30000
 initial_max_data = 15728640

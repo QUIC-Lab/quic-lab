@@ -36,7 +36,9 @@ fn main() -> Result<()> {
     let cfg = read_config(&cfg_path)?;
 
     // Logging
-    let _run_log = core::logging::init_file_logger(&cfg.io.out_dir, cfg.general.log_level)?;
+    if cfg.general.save_log_files {
+        let _run_log = core::logging::init_file_logger(&cfg.io.out_dir, cfg.general.log_level)?;
+    }
 
     // Keylog
     core::keylog::init(&cfg.io.out_dir, cfg.general.save_keylog_files)?;
