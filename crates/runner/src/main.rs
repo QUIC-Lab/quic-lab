@@ -61,6 +61,7 @@ fn main() -> Result<()> {
         std::thread::available_parallelism()
             .map(|nz| nz.get())
             .unwrap_or(4)
+            * 10
     } else {
         cfg.scheduler.concurrency
     };
