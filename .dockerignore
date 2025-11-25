@@ -3,6 +3,7 @@
 .github/
 .idea/
 domain_extractor/
+quic_lab_analyzer/
 in/
 out/
 .gitignore

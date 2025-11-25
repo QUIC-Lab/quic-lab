@@ -9,7 +9,7 @@ Extracts unique **second-level domains (SLDs)** from very large **TLD zone files
 The script is **stdlib-only** (no `pip install`), streams files line-by-line, deduplicates via a temporary **SQLite** store, and shows a **compact,
 low-overhead progress line** (percent by bytes + domains/sec + elapsed).
 
-![python](https://img.shields.io/badge/python-3.9%2B-blue) ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey) ![license](https://img.shields.io/badge/license-MIT-green)
+![python](https://img.shields.io/badge/python-3.9%2B-blue) ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
 
 ---
 
@@ -26,7 +26,6 @@ low-overhead progress line** (percent by bytes + domains/sec + elapsed).
 * [Caveats & Assumptions](#caveats--assumptions)
 * [Troubleshooting](#troubleshooting)
 * [Contributing](#contributing)
-* [License](#license)
 * [Acknowledgements](#acknowledgements)
 
 ---
@@ -266,12 +265,6 @@ python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\ac
 
 ---
 
-## License
-
-MIT — see `LICENSE`.
-
----
-
 ## Acknowledgements
 
 * Blacklist indices courtesy of **Firebog**:
@@ -280,5 +273,3 @@ MIT — see `LICENSE`.
     * `https://v.firebog.net/hosts/lists.php?type=adult`
 
 > Use of third-party blocklists is at your discretion; verify terms and suitability for your use case.
-
----

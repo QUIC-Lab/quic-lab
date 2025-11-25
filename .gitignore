@@ -1,9 +1,12 @@
-### General ###
+### Development ###
+.idea/
+.vscode/
+
+### Project ###
 in/*
 out/
 !in/config.toml.example
 !in/domains.txt.example
-domain_extractor/data/
 .env*
 
 ### Rust ###
