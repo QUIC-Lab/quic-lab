@@ -209,10 +209,10 @@ fn default_concurrency() -> usize {
     0
 } // 0 = auto
 fn default_requests_per_second() -> u32 {
-    200
+    150
 }
 fn default_burst() -> u32 {
-    200
+    150
 }
 fn default_inter_attempt_delay_ms() -> u64 {
     3000
@@ -257,7 +257,7 @@ fn default_path() -> String {
     "/".into()
 }
 fn default_user_agent() -> String {
-    "QUIC-Lab (research; no-harm-intended; opt-out: [INSERT CONTACT INFO])".into()
+    "QUIC Lab (research; no-harm-intended; opt-out: [INSERT CONTACT INFO])".into()
 }
 fn default_verify_peer() -> bool {
     true
